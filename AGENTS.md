@@ -126,10 +126,40 @@ owned by another rights holder.
 - `.private/`: ignored local operational state. It must never enter public
   source, patches, logs, reports, prompts, or release artifacts.
 - `version.toml`: source of truth for suite, launcher, and per-title versions.
+  Release bumps write it; see "Versioning and commit messages".
+- `.cz.toml`, `.cz.<component>.toml`, `tools/commitizen_mojorecomp/`: commit
+  message rules, per-component release lines, and the Commitizen plugin that
+  attributes commits to components and writes versions.
+- `.github/workflows/`: CI for commit message checks and release bumps.
+- `launcher/CHANGELOG.md`, `runtime/CHANGELOG-COT.md`: generated changelogs.
 
 Avoid adding planning diaries, migration reports, agent handoffs, or duplicate
 status Markdown files. Update `README.md` or this file only when the information
 belongs there, and create new documentation only when the owner asks for it.
+
+## Versioning and commit messages
+
+- Every commit message follows Conventional Commits:
+  `type(scope): summary`, with an optional `!` or `BREAKING CHANGE:` footer.
+  CI rejects other messages (`.cz.toml`). The type decides the bump: `feat`
+  is minor, `fix`, `perf`, and `refactor` are patch, breaking changes are
+  major (minor while a line is still `0.x`). Other types do not release.
+- Each release line is defined in `.cz.<component>.toml`: the launcher (tags
+  `vX.Y.Z`, also drives the suite version) and the COT runtime (tags
+  `cot-runtime-vX.Y.Z`, currently SemVer pre-releases such as
+  `0.2.0-alpha.1`). A commit belongs to every line whose
+  `extras.component_paths` it changes. The scope is descriptive only and never
+  decides the component.
+- The release-bump workflow bumps each line on pushes to `main`, regenerates
+  its changelog, and pushes the release commit and tag. Do not edit release
+  versions or generated changelog entries by hand; fix the commit history or
+  configuration instead.
+- `version.toml` stays the source of truth. Any other file that embeds a
+  component version must be listed in that line's `extras.version_mirrors`.
+  The README download link and status table are updated when a release is
+  published, not by the bump.
+- MOM gets its own release line and tag prefix when it becomes a release
+  target. Do not let it inherit the COT line.
 
 ## Architecture rules
 

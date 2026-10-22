@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "commitizen-mojorecomp"
+version = "1.0.0"
+description = "Commitizen rule and version provider for MojoRecomp components"
+license = "ISC"
+requires-python = ">=3.10"
+dependencies = ["commitizen==4.19.2"]
+
+[project.entry-points."commitizen.plugin"]
+cz_mojorecomp = "cz_mojorecomp:MojoRecompCz"
+
+[project.entry-points."commitizen.provider"]
+mojorecomp-version-toml = "cz_mojorecomp:VersionTomlProvider"
+
+[tool.setuptools]
+py-modules = ["cz_mojorecomp"]

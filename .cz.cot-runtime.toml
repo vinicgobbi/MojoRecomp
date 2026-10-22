@@ -1,0 +1,32 @@
+# Crash of the Titans runtime release line. Bumped by the release-bump
+# workflow, or locally with
+# `cz --config .cz.cot-runtime.toml bump --prerelease alpha`. The cz_mojorecomp
+# rule and the version provider come from tools/commitizen_mojorecomp.
+[tool.commitizen]
+name = "cz_mojorecomp"
+version_provider = "mojorecomp-version-toml"
+version_scheme = "semver2"
+tag_format = "cot-runtime-v$version"
+# Tags of the other MojoRecomp release lines.
+ignored_tag_formats = ["v*"]
+major_version_zero = true
+annotated_tag = true
+update_changelog_on_bump = true
+changelog_file = "runtime/CHANGELOG-COT.md"
+bump_message = "chore(release): cot runtime $current_version -> $new_version"
+
+[tool.commitizen.extras]
+# Git pathspecs. Everything that changes the native runtime or the generated
+# guest code belongs to this release line.
+component_paths = [
+    "runtime/",
+    "config/",
+    "patches/",
+    "tools/",
+    "thirdparty/",
+    ":(exclude)tools/commitizen_mojorecomp/",
+]
+version_keys = ["cot_runtime"]
+version_mirrors = [
+    { file = "launcher/resources/games/cot.toml", pattern = '^runtime_version = "(?P<version>[^"]+)"' },
+]

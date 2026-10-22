@@ -59,6 +59,8 @@ cache/
 *.dll
 __pycache__/
 *.py[cod]
+*.egg-info/
+tools/commitizen_mojorecomp/build/
 cmake-build-*/
 CMakeCache.txt
 CMakeFiles/

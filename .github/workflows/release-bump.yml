@@ -1,0 +1,59 @@
+# Bumps each MojoRecomp release line from the Conventional Commits that changed
+# it since its last tag, updates its CHANGELOG, and pushes the release commit
+# and tag. Components and their paths are defined in .cz.<component>.toml.
+name: Release bump
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-bump-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pre-release label for the COT runtime line. Clear it to release stable
+  # runtime versions.
+  COT_RUNTIME_PRERELEASE: alpha
+
+jobs:
+  bump:
+    # Pushes made with GITHUB_TOKEN do not start workflows; this guard also
+    # covers release commits pushed with another credential.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Commitizen and the MojoRecomp plugin
+        run: python -m pip install ./tools/commitizen_mojorecomp
+
+      - name: Configure release identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Exit code 21 (NO_INCREMENT) means the component has nothing to release.
+      - name: Bump launcher
+        run: cz --no-raise 21 --config .cz.launcher.toml bump --yes
+
+      - name: Bump COT runtime
+        run: |
+          prerelease=()
+          if [ -n "$COT_RUNTIME_PRERELEASE" ]; then
+            prerelease=(--prerelease "$COT_RUNTIME_PRERELEASE")
+          fi
+          cz --no-raise 21 --config .cz.cot-runtime.toml bump --yes "${prerelease[@]}"
+
+      - name: Push release commits and tags
+        run: git push --atomic --follow-tags origin "HEAD:${GITHUB_REF_NAME}"

@@ -1,0 +1,11 @@
+# Optional local check of commit messages against .cz.toml. Enable it with
+#   python -m pip install pre-commit
+#   pre-commit install
+default_install_hook_types: [commit-msg]
+
+repos:
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.19.2
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]

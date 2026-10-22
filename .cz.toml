@@ -1,0 +1,4 @@
+# Commit message convention shared by every component. Component release
+# lines live in .cz.<component>.toml; see tools/commitizen_mojorecomp.
+[tool.commitizen]
+name = "cz_conventional_commits"

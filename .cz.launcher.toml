@@ -1,0 +1,27 @@
+# MojoRecomp Launcher release line. Bumped by the release-bump workflow, or
+# locally with `cz --config .cz.launcher.toml bump`. The cz_mojorecomp rule and
+# the version provider come from tools/commitizen_mojorecomp.
+[tool.commitizen]
+name = "cz_mojorecomp"
+version_provider = "mojorecomp-version-toml"
+version_scheme = "semver2"
+tag_format = "v$version"
+# Tags of the other MojoRecomp release lines.
+ignored_tag_formats = ["cot-runtime-v*"]
+annotated_tag = true
+update_changelog_on_bump = true
+changelog_file = "launcher/CHANGELOG.md"
+bump_message = "chore(release): launcher $current_version -> $new_version"
+
+[tool.commitizen.extras]
+component_paths = ["launcher/"]
+# The suite version follows the launcher release.
+version_keys = ["launcher", "suite"]
+version_mirrors = [
+    { file = "launcher/package.json", pattern = '^  "version": "(?P<version>[^"]+)"' },
+    { file = "launcher/package-lock.json", pattern = '^ +"name": "mojorecomp-launcher",\n +"version": "(?P<version>[^"]+)"', count = 2 },
+    { file = "launcher/src-tauri/Cargo.toml", pattern = '^version = "(?P<version>[^"]+)"' },
+    { file = "launcher/src-tauri/Cargo.lock", pattern = '^name = "mojorecomp-launcher"\nversion = "(?P<version>[^"]+)"' },
+    { file = "launcher/src-tauri/tauri.conf.json", pattern = '^  "version": "(?P<version>[^"]+)"' },
+    { file = "launcher/resources/suite.toml", pattern = '^version = "(?P<version>[^"]+)"' },
+]
