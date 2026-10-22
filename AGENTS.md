@@ -15,6 +15,11 @@ setup and product information belongs in `README.md`.
 - **Crash of the Titans (COT)** is the current playable target.
 - **Crash: Mind Over Mutant (MOM)** has a separate launcher profile and runtime
   identity, but is not yet a playable target.
+- Supported host platforms are **Windows x64** and **Linux x64**. Both the
+  launcher and the runtime are being made native on each platform. Windows is
+  the established release target; Linux support is in progress and must not be
+  described as released or validated until it has passed the same manual
+  gameplay and visual review. No other host OS or architecture is in scope.
 - Keep maintained source code, project-controlled identifiers, comments, UI
   text, configuration, tests, logs, and documentation in English.
 - English is mandatory for class, function, method, variable, constant, field,
@@ -70,8 +75,8 @@ Never add, stage, package, upload, quote, or expose:
 - extracted or managed game directories, including `games/`;
 - saves, settings, user content, caches, or any `userdata/` contents;
 - generated PPC translation units or generated guest images;
-- build directories, packaged applications, executables, DLLs, symbols, maps,
-  crash dumps, shader dumps, logs, screenshots, captures, or support bundles;
+- build directories, packaged applications (including AppImages), executables,
+  DLLs, shared objects, symbols, maps, crash dumps, core dumps, shader dumps, logs, screenshots, captures, or support bundles;
 - local toolchain/dependency trees; or
 - `.private/` contents, agent handoffs, operational notes, or other private
   development state.
@@ -102,7 +107,14 @@ owned by another rights holder.
   upstream dependencies that require MojoRecomp compatibility changes.
   Update the maintained patch instead of hand-editing a disposable dependency
   checkout.
-- `tools/`: analysis and recompilation helpers. Windows entry points are `.bat`.
+- `tools/`: analysis, recompilation, and asset-conversion helpers. Maintained
+  tools are cross-platform Python programs invoked directly; see
+  "Cross-platform tooling policy".
+- `launcher/scripts/`: cross-platform Node.js build, notice, packaging, and
+  release-validation scripts exposed through `launcher/package.json`.
+- `launcher/src-tauri/src/platform.rs`: single owner of launcher OS differences
+  (executable names, required runtime files, release targets, catalog names,
+  process and self-replacement details).
 - `launcher/resources/`: title metadata, required notices, verified license
   texts, and distribution metadata. Do not delete license files to reduce file
   count.
@@ -145,39 +157,97 @@ belongs there, and create new documentation only when the owner asks for it.
 - Do not replace the currently owner-approved launcher artwork or remove its
   hash/provenance validation without explicit owner approval.
 
-## Windows scripting policy
+## Platform rules
 
-MojoRecomp uses batch entry points on Windows.
+- Keep OS-specific code behind explicit, isolated boundaries: `platform.rs` and
+  `#[cfg(...)]` blocks in the launcher, and host abstraction layers selected by
+  CMake platform checks in the runtime. Shared logic must stay platform-neutral
+  and must not branch on OS in scattered call sites.
+- Every launcher change must keep both Windows and Linux building. The runtime
+  port to Linux is in progress: runtime changes must not regress the Windows
+  build, and new runtime code should be written against the host abstraction
+  rather than adding new direct Win32 dependencies to shared code. Never add a `cfg`/`#ifdef` path for one platform without the matching path,
+  or an explicit and safe "unsupported" failure, for the other.
+- The Linux runtime is native. Do not add Wine, Proton, or other Windows
+  compatibility-layer bridges, settings, or fallbacks.
+- On Linux the launcher is distributed as an AppImage and self-updates by
+  replacing that AppImage. The Windows package layout and update catalog name
+  must stay compatible with launchers that are already installed.
+- Linux user data uses the existing XDG-based fallback (`XDG_DATA_HOME`,
+  defaulting to `~/.local/share`). Do not introduce a new layout without owner
+  approval, and keep it covered by the same migration and preservation rules
+  as Windows.
+- A launcher on a platform for which no runtime package has been published yet
+  must report that clearly and degrade gracefully instead of failing obscurely
+  or downloading a package built for another OS.
+- Treat paths, case sensitivity, path separators, executable bits, line
+  endings, and process/signal semantics as platform differences. Use the
+  standard library or the toolchain for path handling instead of hand-built
+  separators or drive-letter assumptions.
 
-- Never add, restore, invoke, or document a `.ps1` project script.
-- Use `.bat` for maintained Windows automation and `.cmd` executables such as
-  `npm.cmd` when required by an installed tool.
-- Keep batch scripts non-interactive where practical, fail on errors, quote
-  paths, and work when the repository path contains spaces.
-- Do not duplicate substantial build logic across batch files. Keep the logic in
-  the owning build/tool configuration and use `.bat` as the stable entry point.
+## Cross-platform tooling policy
+
+The goal is a single set of native, cross-platform entry points with no shell
+wrapper scripts. The legacy Windows batch files (`setup.bat`,
+`build-smoke.bat`, `release.bat`, `build-localization-delta.bat`, and
+`tools\*.bat`) are being retired.
+
+- Never add a new `.bat`, `.cmd`, `.ps1`, or `.sh` project script, and never
+  restore one that has been removed. Do not invoke or document `.ps1` scripts.
+- Implement automation in the layer that owns it:
+  - runtime configuration, build, dependency/toolchain detection, and tests:
+    CMake (presets, options, `find_*` logic, and CTest);
+  - analysis, recompilation, patch application, and asset conversion: Python 3
+    programs under `tools/`, invoked directly with the platform's Python 3
+    interpreter;
+  - launcher build, notices, packaging, and release validation: Node.js
+    scripts under `launcher/scripts/`, exposed as `npm run` scripts;
+  - end-user operations such as import, extraction, validation, and launch:
+    native Rust in the launcher.
+- Native entry points must work on Windows and Linux, be non-interactive, fail
+  with a non-zero exit code and a clear message, and handle repository paths
+  that contain spaces. Do not hard-code machine-specific install locations
+  such as `C:\Program Files\...`; discover tools or accept them as explicit
+  configuration.
+- `npm run` scripts must call `npm`/`node` portably, never `npm.cmd`.
+- When replacing a batch file, move its full behavior into the owning native
+  entry point, update `README.md`, this file, and any callers in the same
+  change, and only then delete the batch file. Until a replacement exists, the
+  legacy batch file remains the Windows entry point and must keep working.
+- Do not duplicate build logic between a legacy batch file and its native
+  replacement. While both exist, the batch file may only forward to the native
+  entry point.
 
 ## Canonical commands
 
 Run commands from the repository root unless a command changes directory.
+
+Launcher checks and production build (Windows and Linux):
+
+```sh
+cd launcher
+npm ci
+npm run check
+npm run generate:notices
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build:production
+```
+
+Python tools are invoked directly, for example `python3 tools/recompile.py`
+(`py -3 tools\recompile.py` on Windows).
+
+Legacy Windows-only entry points, kept until their native replacements land:
 
 ```bat
 setup.bat
 tools\analyze.bat
 tools\recompile.bat
 build-smoke.bat
+release.bat
 ```
 
-Launcher checks and production build:
-
-```bat
-cd launcher
-npm.cmd ci
-npm.cmd run check
-npm.cmd run generate:notices
-cargo test --manifest-path src-tauri\Cargo.toml
-npm.cmd run build:production
-```
+When a native replacement lands, replace its entry here instead of listing
+both.
 
 Public release packaging requires the release asset base and notes URLs. Artwork,
 clean-install behavior, and representative gameplay/visual behavior remain manual
@@ -205,13 +275,21 @@ the changed area, and state clearly when a required check could not be run.
 
 ## Validation by area
 
-- Runtime C++ or CMake: run the relevant focused test/probe, then
-  `build-smoke.bat` when the change can affect integration or linking.
-- Recompiler configuration or switch tables: run `tools\analyze.bat`,
-  `tools\recompile.bat`, and the relevant smoke gate. Generated output remains
-  local.
-- Launcher Svelte/TypeScript/CSS: run `npm.cmd run check`; build the launcher
+- Platform coverage: validate on the host you are running on and state
+  explicitly which platform was not built or tested. For launcher Rust changes
+  that touch `cfg` code, also type-check the other target when its toolchain
+  is available (for example `cargo check --target x86_64-pc-windows-msvc` or
+  `--target x86_64-unknown-linux-gnu`); otherwise report it as unverified.
+- Runtime C++ or CMake: run the relevant focused test/probe, then the smoke
+  build (currently `build-smoke.bat` on Windows) when the change can affect
+  integration or linking.
+- Recompiler configuration or switch tables: run analysis, recompilation, and
+  the relevant smoke gate. Generated output remains local.
+- Launcher Svelte/TypeScript/CSS: run `npm run check`; build the launcher
   when bundling or runtime integration is affected.
+- Tooling migration (replacing a batch file): run the new native entry point
+  on every platform available to you and confirm it reproduces the batch
+  file's behavior before deleting the batch file.
 - Launcher Rust/Tauri: run focused Cargo tests, then the launcher build when
   IPC, setup, filesystem, process, or packaging behavior changes.
 - Versions, bundled resources, notices, or packaging: regenerate notices if
