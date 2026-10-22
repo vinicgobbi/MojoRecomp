@@ -9,19 +9,14 @@ const runtimeSource = resolve(projectRoot, "runtime/build-smoke/cot-runtime.exe"
 const ffmpegSource = resolve(projectRoot, "runtime/build-smoke/mojorecomp-ffmpeg.dll");
 const lzxSource = resolve(projectRoot, "runtime/build-smoke/mojorecomp-lzx.dll");
 const dxcRoot = resolve(projectRoot, "thirdparty/XenosRecomp/thirdparty/dxc-bin/bin/x64");
-const runtimeDestination = resolve(
-  launcherRoot,
-  "src-tauri/binaries/cot-runtime-x86_64-pc-windows-msvc.exe"
-);
 const libraryDestination = resolve(launcherRoot, "bundle/lib");
 const toolDestination = resolve(launcherRoot, "bundle/tools");
 const extractXisoSource = resolve(projectRoot, "thirdparty/build/extract-xiso/extract-xiso.exe");
 
-// Only Windows launcher builds embed the transitional COT runtime bootstrap.
-// Linux launchers always install the signed runtime component instead.
+// Stages the Windows COT runtime dependencies that package-release.mjs puts in
+// the runtime component. The launcher itself embeds no runtime payload.
 if (process.platform !== "win32") {
-  console.log("Skipping embedded runtime bootstrap: not used by this launcher platform");
-  process.exit(0);
+  throw new Error("The COT runtime component is currently built on Windows only");
 }
 
 async function requireFile(path, label) {
@@ -62,10 +57,8 @@ await requireFile(resolve(dxcRoot, "dxcompiler.dll"), "DXC compiler library");
 await requireFile(resolve(dxcRoot, "dxil.dll"), "DXIL support library");
 await requireFile(extractXisoSource, "extract-xiso utility");
 
-await mkdir(dirname(runtimeDestination), { recursive: true });
 await mkdir(libraryDestination, { recursive: true });
 await mkdir(toolDestination, { recursive: true });
-await copyVerified(runtimeSource, runtimeDestination, "cot-runtime.exe");
 await copyVerified(
   ffmpegSource,
   resolve(libraryDestination, "mojorecomp-ffmpeg.dll"),

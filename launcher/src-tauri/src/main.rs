@@ -52,38 +52,6 @@ const RUNTIME_HISTORY_MANIFEST: &str = include_str!("../../resources/runtime-his
 const DISK_MINIMUM_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
 const OBS_VULKAN_CAPTURE_DISABLE_ENV: &str = "DISABLE_VULKAN_OBS_CAPTURE";
 include!(concat!(env!("OUT_DIR"), "/third_party_licenses.rs"));
-// Windows production builds embed the verified runtime/tool payload prepared
-// by scripts/prepare-bundle.mjs. Unit tests exercise launcher logic only and
-// must remain runnable from a clean source tree before packaging output exists.
-// Linux builds have no transitional bootstrap and always require the signed
-// runtime component.
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_COT_RUNTIME: &[u8] =
-    include_bytes!("../binaries/cot-runtime-x86_64-pc-windows-msvc.exe");
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_DXCOMPILER: &[u8] = include_bytes!("../../bundle/lib/dxcompiler.dll");
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_DXIL: &[u8] = include_bytes!("../../bundle/lib/dxil.dll");
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_FFMPEG: &[u8] = include_bytes!("../../bundle/lib/mojorecomp-ffmpeg.dll");
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_LZX: &[u8] = include_bytes!("../../bundle/lib/mojorecomp-lzx.dll");
-#[cfg(all(windows, not(test)))]
-const EMBEDDED_EXTRACT_XISO: &[u8] = include_bytes!("../../bundle/tools/extract-xiso.exe");
-
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_COT_RUNTIME: &[u8] = &[];
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_DXCOMPILER: &[u8] = &[];
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_DXIL: &[u8] = &[];
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_FFMPEG: &[u8] = &[];
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_LZX: &[u8] = &[];
-#[cfg(any(test, not(windows)))]
-const EMBEDDED_EXTRACT_XISO: &[u8] = &[];
-
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
@@ -1222,62 +1190,6 @@ fn migrate_legacy_game_components() -> Result<LegacyComponentMigration, String> 
     Ok(migrate_known_game_components(&legacy, &destination))
 }
 
-fn migrate_legacy_embedded_runtime_cache(runtime_version: &str) -> Result<bool, String> {
-    // The legacy cache only ever held the Windows embedded bootstrap payload.
-    if !embedded_cot_bootstrap_available() {
-        return Ok(false);
-    }
-    let store = game_component_store()?;
-    if runtime_component_is_ready(&store, "runtime.cot")? {
-        return Ok(false);
-    }
-    let legacy_base = storage_layout()?.local_root().join("runtime");
-    if !legacy_base.is_dir() {
-        return Ok(false);
-    }
-    let embedded_payloads: [&[u8]; 6] = [
-        EMBEDDED_COT_RUNTIME,
-        EMBEDDED_DXCOMPILER,
-        EMBEDDED_DXIL,
-        EMBEDDED_FFMPEG,
-        EMBEDDED_LZX,
-        EMBEDDED_EXTRACT_XISO,
-    ];
-    let expected = updates::COT_RUNTIME_REQUIRED_FILES
-        .into_iter()
-        .zip(embedded_payloads);
-    for entry in fs::read_dir(&legacy_base)
-        .map_err(|error| format!("Could not inspect legacy runtime cache: {error}"))?
-    {
-        let entry =
-            entry.map_err(|error| format!("Could not inspect legacy runtime cache: {error}"))?;
-        if !entry
-            .file_type()
-            .map_err(|error| format!("Could not inspect legacy runtime cache entry: {error}"))?
-            .is_dir()
-        {
-            continue;
-        }
-        let root = entry.path();
-        let matches = expected.clone().all(|(name, bytes)| {
-            fs::read(root.join(name))
-                .map(|current| current.as_slice() == bytes)
-                .unwrap_or(false)
-        });
-        if !matches {
-            continue;
-        }
-        return store.import_migrated_runtime(
-            "runtime.cot",
-            runtime_version,
-            updates::COT_RUNTIME_ENTRYPOINT,
-            &root,
-            &updates::COT_RUNTIME_REQUIRED_FILES,
-        );
-    }
-    Ok(false)
-}
-
 fn cleanup_legacy_runtime_cache_if_ready() -> Result<bool, String> {
     let store = game_component_store()?;
     if !runtime_component_is_ready(&store, "runtime.cot")? {
@@ -1349,67 +1261,6 @@ fn managed_game_root(game_id: &str) -> Result<PathBuf, String> {
     Ok(managed_games_root()?.join(game_id))
 }
 
-fn embedded_payload_root() -> Result<PathBuf, String> {
-    Ok(storage_layout()?.runtime_root(env!("CARGO_PKG_VERSION")))
-}
-
-fn materialize_embedded_file(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let root = embedded_payload_root()?;
-    materialize_embedded_file_at(&root, name, bytes)
-}
-
-fn materialize_embedded_file_at(root: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    fs::create_dir_all(root)
-        .map_err(|e| format!("Could not create embedded payload cache: {e}"))?;
-    let path = root.join(name);
-    let current_matches = fs::read(&path)
-        .map(|current| current == bytes)
-        .unwrap_or(false);
-    if current_matches {
-        return Ok(path);
-    }
-
-    let temp = root.join(format!(".{name}.{}.tmp", std::process::id()));
-    fs::write(&temp, bytes)
-        .map_err(|e| format!("Could not materialize embedded payload {name}: {e}"))?;
-    if path.exists() {
-        let _ = fs::remove_file(&path);
-    }
-    fs::rename(&temp, &path)
-        .map_err(|e| format!("Could not activate embedded payload {name}: {e}"))?;
-    Ok(path)
-}
-
-fn materialize_replaceable_library(name: &str, embedded: &[u8]) -> Result<PathBuf, String> {
-    let layout = storage_layout()?;
-    materialize_replaceable_library_at(
-        &embedded_payload_root()?,
-        &layout.local_root().join("lgpl-overrides"),
-        name,
-        embedded,
-    )
-}
-
-fn materialize_replaceable_library_at(
-    payload_root: &Path,
-    override_root: &Path,
-    name: &str,
-    embedded: &[u8],
-) -> Result<PathBuf, String> {
-    let override_path = override_root.join(name);
-    let bytes = match fs::read(&override_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => embedded.to_vec(),
-        Err(error) => {
-            return Err(format!(
-                "Could not read LGPL library override {}: {error}",
-                override_path.display()
-            ));
-        }
-    };
-    materialize_embedded_file_at(payload_root, name, &bytes)
-}
-
 fn write_text_if_changed(path: &Path, text: &str) -> Result<(), String> {
     if fs::read_to_string(path)
         .map(|current| current == text)
@@ -1436,28 +1287,6 @@ fn materialize_license_notices(root: &Path) -> Result<PathBuf, String> {
     Ok(summary)
 }
 
-fn ensure_embedded_runtime_payloads() -> Result<(PathBuf, PathBuf, PathBuf), String> {
-    let runtime = materialize_embedded_file("cot-runtime.exe", EMBEDDED_COT_RUNTIME)?;
-    let dxc = materialize_embedded_file("dxcompiler.dll", EMBEDDED_DXCOMPILER)?;
-    let dxil = materialize_embedded_file("dxil.dll", EMBEDDED_DXIL)?;
-    materialize_replaceable_library("mojorecomp-ffmpeg.dll", EMBEDDED_FFMPEG)?;
-    materialize_replaceable_library("mojorecomp-lzx.dll", EMBEDDED_LZX)?;
-    Ok((runtime, dxc, dxil))
-}
-
-fn embedded_cot_bootstrap_available() -> bool {
-    [
-        EMBEDDED_COT_RUNTIME,
-        EMBEDDED_DXCOMPILER,
-        EMBEDDED_DXIL,
-        EMBEDDED_FFMPEG,
-        EMBEDDED_LZX,
-        EMBEDDED_EXTRACT_XISO,
-    ]
-    .iter()
-    .all(|payload| !payload.is_empty())
-}
-
 fn prepared_cot_runtime_component() -> Result<Option<PathBuf>, String> {
     let store = game_component_store()?;
     let Some(status) = store.active_status("runtime.cot")? else {
@@ -1474,27 +1303,15 @@ fn prepared_cot_runtime_component() -> Result<Option<PathBuf>, String> {
 }
 
 fn extract_xiso_path() -> Result<PathBuf, String> {
-    match prepared_cot_runtime_component() {
-        Ok(Some(runtime)) => {
-            if let Some(root) = runtime.parent() {
-                let tool = root.join(platform::EXTRACT_XISO_EXECUTABLE);
-                if tool.is_file() {
-                    return Ok(tool);
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(error) if embedded_cot_bootstrap_available() => {
-            append_launcher_log(&format!(
-                "COT runtime component is unusable during setup; using the transitional embedded bootstrap: {error}"
-            ));
-        }
-        Err(error) => return Err(error),
-    }
-    if !embedded_cot_bootstrap_available() {
-        return Err("The required COT runtime component is not installed or is corrupted".into());
-    }
-    materialize_embedded_file("extract-xiso.exe", EMBEDDED_EXTRACT_XISO)
+    let runtime = prepared_cot_runtime_component()?.ok_or_else(|| {
+        "The required COT runtime component is not installed or is corrupted".to_string()
+    })?;
+    let tool = runtime
+        .parent()
+        .map(|root| root.join(platform::EXTRACT_XISO_EXECUTABLE))
+        .filter(|tool| tool.is_file())
+        .ok_or_else(|| "The installed COT runtime component has no extract-xiso tool".to_string())?;
+    Ok(tool)
 }
 
 fn emit_setup_progress(app: &tauri::AppHandle, progress: GameSetupProgress) {
@@ -2399,22 +2216,9 @@ fn open_game_library() -> Result<(), String> {
 
 fn runtime_path(manifest: &GameManifest) -> Result<PathBuf, String> {
     if manifest.id == "cot" {
-        match prepared_cot_runtime_component() {
-            Ok(Some(runtime)) => return Ok(runtime),
-            Ok(None) => {}
-            Err(error) if embedded_cot_bootstrap_available() => {
-                append_launcher_log(&format!(
-                    "COT runtime component is unusable; using the transitional embedded bootstrap: {error}"
-                ));
-            }
-            Err(error) => return Err(error),
-        }
-        if !embedded_cot_bootstrap_available() {
-            return Err(
-                "The required COT runtime component is not installed or is corrupted".into(),
-            );
-        }
-        return ensure_embedded_runtime_payloads().map(|(runtime, _, _)| runtime);
+        return prepared_cot_runtime_component()?.ok_or_else(|| {
+            "The required COT runtime component is not installed or is corrupted".to_string()
+        });
     }
     Err(format!(
         "Runtime executable not found for {}",
@@ -5880,17 +5684,6 @@ fn main() {
             "Legacy game component migration was deferred: {error}"
         )),
     }
-    if let Some(cot) = manifests.iter().find(|game| game.id == "cot") {
-        match migrate_legacy_embedded_runtime_cache(&cot.runtime_version) {
-            Ok(true) => append_launcher_log(
-                "Migrated validated embedded runtime cache into the game library",
-            ),
-            Ok(false) => {}
-            Err(error) => append_launcher_log(&format!(
-                "Legacy embedded runtime migration was deferred: {error}"
-            )),
-        }
-    }
     match cleanup_legacy_runtime_cache_if_ready() {
         Ok(true) => append_launcher_log(
             "Removed legacy Local AppData runtime cache after validating runtime.cot",
@@ -6054,29 +5847,6 @@ mod tests {
             std::process::id(),
             nonce
         ))
-    }
-
-    #[test]
-    fn lgpl_library_override_replaces_the_embedded_payload() {
-        let root = isolated_test_root();
-        let payload = root.join("runtime");
-        let overrides = root.join("lgpl-overrides");
-        fs::create_dir_all(&overrides).expect("override directory");
-        fs::write(overrides.join("library.dll"), b"modified-library").expect("write override");
-
-        let path = materialize_replaceable_library_at(
-            &payload,
-            &overrides,
-            "library.dll",
-            b"embedded-library",
-        )
-        .expect("materialize override");
-
-        assert_eq!(
-            fs::read(path).expect("read materialized library"),
-            b"modified-library"
-        );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

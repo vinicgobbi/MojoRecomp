@@ -190,58 +190,7 @@ if (Object.keys(resources).length !== 0) {
   fail(`Unexpected external resources: ${JSON.stringify(resources)}`);
 }
 
-const sourceRuntime = resolve(projectRoot, "runtime/build-smoke/cot-runtime.exe");
-const stagedRuntime = resolve(launcherRoot, "src-tauri/binaries/cot-runtime-x86_64-pc-windows-msvc.exe");
-const ffmpegSource = resolve(projectRoot, "runtime/build-smoke/mojorecomp-ffmpeg.dll");
-const lzxSource = resolve(projectRoot, "runtime/build-smoke/mojorecomp-lzx.dll");
-const dxcRoot = resolve(projectRoot, "thirdparty/XenosRecomp/thirdparty/dxc-bin/bin/x64");
-const stagedLib = resolve(launcherRoot, "bundle/lib");
-const extractXisoSource = resolve(projectRoot, "thirdparty/build/extract-xiso/extract-xiso.exe");
-const stagedExtractXiso = resolve(launcherRoot, "bundle/tools/extract-xiso.exe");
-for (const [source, staged, label] of [
-  [sourceRuntime, stagedRuntime, "COT runtime"],
-  [ffmpegSource, resolve(stagedLib, "mojorecomp-ffmpeg.dll"), "FFmpeg shared library"],
-  [lzxSource, resolve(stagedLib, "mojorecomp-lzx.dll"), "libmspack LZX shared library"],
-  [resolve(dxcRoot, "dxcompiler.dll"), resolve(stagedLib, "dxcompiler.dll"), "DXC compiler"],
-  [resolve(dxcRoot, "dxil.dll"), resolve(stagedLib, "dxil.dll"), "DXIL library"],
-  [extractXisoSource, stagedExtractXiso, "extract-xiso utility"],
-]) {
-  await requireFile(source, `${label} source`);
-  await requireFile(staged, `${label} staged file`);
-  const sourceHash = await sha256(source);
-  const stagedHash = await sha256(staged);
-  if (sourceHash !== stagedHash) fail(`${label} staging hash mismatch`);
-  console.log(`OK: ${label} SHA-256 ${sourceHash}`);
-  await rejectLocalBuildPaths(source, label);
-  await rejectLocalBuildPaths(staged, `${label} staged file`);
-}
-
-const runtimeImage = await readFile(sourceRuntime);
-for (const dependency of ["mojorecomp-ffmpeg.dll", "mojorecomp-lzx.dll"]) {
-  if (!runtimeImage.includes(Buffer.from(dependency, "ascii"))) {
-    fail(`COT runtime is not dynamically linked to ${dependency}`);
-  }
-}
-const runtimeMap = await readFile(
-  resolve(projectRoot, "runtime/build-smoke/MojoRecompBootProbe.map"),
-  "utf8",
-);
-if (!runtimeMap.includes("libavcodec:mojorecomp-ffmpeg.dll")) {
-  fail("Runtime map does not resolve FFmpeg through the replaceable DLL");
-}
-if (!runtimeMap.includes("mojorecomp-lzx:mojorecomp-lzx.dll")) {
-  fail("Runtime map does not resolve libmspack LZX through the replaceable DLL");
-}
-if (runtimeMap.includes("XenonUtils:lzxd.c.obj")) {
-  fail("Runtime still contains statically linked libmspack LZX object code");
-}
-console.log("OK: LGPL libraries are dynamically linked and replaceable");
-
-const allowedRoots = [
-  resolve(launcherRoot, "resources"),
-  resolve(launcherRoot, "bundle"),
-  resolve(launcherRoot, "src-tauri/binaries"),
-];
+const allowedRoots = [resolve(launcherRoot, "resources")];
 const forbiddenNames = /(^|[\\/])(default\.xex|default\.rcf|userdata|save)([\\/]|$)/i;
 const forbiddenExtensions = /\.(xex|rcf|iso)$/i;
 for (const root of allowedRoots) {

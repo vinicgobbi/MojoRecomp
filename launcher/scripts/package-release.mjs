@@ -643,6 +643,25 @@ for (const [source, name] of cotRuntimeFiles) {
   await requireFile(source, "COT runtime component file " + name);
 }
 await requireFile(cotRuntimePdb, "COT runtime private symbols");
+const cotRuntimeImage = await readFile(cotRuntimeFiles[0][0]);
+for (const dependency of ["mojorecomp-ffmpeg.dll", "mojorecomp-lzx.dll"]) {
+  if (!cotRuntimeImage.includes(Buffer.from(dependency, "ascii"))) {
+    fail(`COT runtime is not dynamically linked to ${dependency}`);
+  }
+}
+const cotRuntimeMap = await readFile(
+  resolve(projectRoot, "runtime/build-smoke/MojoRecompBootProbe.map"),
+  "utf8",
+);
+if (!cotRuntimeMap.includes("libavcodec:mojorecomp-ffmpeg.dll")) {
+  fail("Runtime map does not resolve FFmpeg through the replaceable DLL");
+}
+if (!cotRuntimeMap.includes("mojorecomp-lzx:mojorecomp-lzx.dll")) {
+  fail("Runtime map does not resolve libmspack LZX through the replaceable DLL");
+}
+if (cotRuntimeMap.includes("XenonUtils:lzxd.c.obj")) {
+  fail("Runtime still contains statically linked libmspack LZX object code");
+}
 await releaseSigningKey();
 
 assertSafeReleaseRoot();

@@ -143,10 +143,6 @@ impl StorageLayout {
         self.logs_root().join(game_id)
     }
 
-    pub fn runtime_root(&self, version: &str) -> PathBuf {
-        self.local_root.join("runtime").join(version)
-    }
-
     pub fn components_root(&self) -> PathBuf {
         self.local_root.join("components")
     }
