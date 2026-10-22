@@ -156,8 +156,8 @@ export function runtimeHistoryFromCatalog(catalogText, currentVersion) {
     "mojorecomp-ffmpeg.dll",
     "mojorecomp-lzx.dll",
     "extract-xiso.exe",
+    // Unsigned releases carry no mojorecomp-package.sig.
     "mojorecomp-package.toml",
-    "mojorecomp-package.sig",
   ];
 
   for (const block of blocks) {

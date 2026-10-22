@@ -208,6 +208,13 @@ for (const root of allowedRoots) {
   }
 }
 
+// CI validates the source metadata only; release artifacts are checked by
+// package-launcher-release.mjs instead of a local production directory.
+if (process.argv.includes("--metadata-only")) {
+  console.log("OK: release metadata validated (--metadata-only).");
+  process.exit(0);
+}
+
 const portableRoot = process.env.MOJORECOMP_PRODUCTION_ROOT
   ? resolve(process.env.MOJORECOMP_PRODUCTION_ROOT)
   : resolve(projectRoot, "../game/production");

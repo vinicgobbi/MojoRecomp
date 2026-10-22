@@ -1,3 +1,6 @@
+// Verifies a COT runtime release produced by package-release.mjs. Package
+// signatures are checked when the launcher embeds a release public key; in
+// unsigned release mode the manifests' file hashes are still enforced.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,8 +13,6 @@ const projectRoot = resolve(launcherRoot, "..");
 const releaseRoot = resolve(projectRoot, ".release");
 const manifestName = "mojorecomp-package.toml";
 const signatureName = "mojorecomp-package.sig";
-const launcherSignatureMagic = Buffer.from("MOJORECOMP-LAUNCHER-SIG-V1", "ascii");
-const launcherSignatureDomain = Buffer.from("MojoRecomp launcher executable signature v1\0", "utf8");
 
 function fail(message) {
   throw new Error(message);
@@ -39,11 +40,11 @@ async function collectRegularFiles(root, current = root, output = []) {
 }
 
 function extractArchive(archive, destination) {
-  const result = spawnSync("tar.exe", ["-xf", archive, "-C", destination], {
+  const result = spawnSync("tar", ["-xf", archive, "-C", destination], {
     encoding: "utf8",
     windowsHide: true,
   });
-  if (result.error) fail(`Could not start tar.exe: ${result.error.message}`);
+  if (result.error) fail(`Could not start tar: ${result.error.message}`);
   if (result.status !== 0) {
     fail(`Could not extract ${archive}: ${(result.stderr || result.stdout).trim()}`);
   }
@@ -73,12 +74,14 @@ async function verifyArchive(archive, expectedRoot, publicKey) {
     if (!/^schema_version\s*=\s*2\s*$/m.test(manifest)) {
       fail(`${archive} does not use signed offline package schema 2`);
     }
-    const signatureText = (await readFile(join(root, signatureName), "utf8")).trim();
-    if (!/^[0-9a-f]{128}$/.test(signatureText)) {
-      fail(`${archive} contains a malformed Ed25519 signature`);
-    }
-    if (!verify(null, manifestBytes, publicKey, Buffer.from(signatureText, "hex"))) {
-      fail(`${archive} has an invalid Ed25519 signature`);
+    if (publicKey) {
+      const signatureText = (await readFile(join(root, signatureName), "utf8")).trim();
+      if (!/^[0-9a-f]{128}$/.test(signatureText)) {
+        fail(`${archive} contains a malformed Ed25519 signature`);
+      }
+      if (!verify(null, manifestBytes, publicKey, Buffer.from(signatureText, "hex"))) {
+        fail(`${archive} has an invalid Ed25519 signature`);
+      }
     }
 
     const declared = parseSignedFiles(manifest);
@@ -105,7 +108,7 @@ async function verifyArchive(archive, expectedRoot, publicKey) {
         fail(`${archive} failed signed payload verification: ${file.path}`);
       }
     }
-    console.log(`OK: signed package ${expectedRoot} (${declared.length} payload files)`);
+    console.log(`OK: ${publicKey ? "signed" : "unsigned"} package ${expectedRoot} (${declared.length} payload files)`);
   } finally {
     await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
@@ -164,10 +167,12 @@ async function verifyLocalizationPackArchive(archive, expectedRoot, expectedVers
     if (!new RegExp(`^version\\s*=\\s*"${expectedVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*$`, "m").test(manifest)) {
       fail(`${archive} Localization Pack version does not match ${expectedVersion}`);
     }
-    const signatureText = (await readFile(signaturePath, "utf8")).trim();
-    if (!/^[0-9a-f]{128}$/.test(signatureText)
-        || !verify(null, manifestBytes, publicKey, Buffer.from(signatureText, "hex"))) {
-      fail(`${archive} has an invalid Localization Pack signature`);
+    if (publicKey) {
+      const signatureText = (await readFile(signaturePath, "utf8")).trim();
+      if (!/^[0-9a-f]{128}$/.test(signatureText)
+          || !verify(null, manifestBytes, publicKey, Buffer.from(signatureText, "hex"))) {
+        fail(`${archive} has an invalid Localization Pack signature`);
+      }
     }
     const languages = parseLocalizationPackLanguages(manifest);
     const actual = (await collectRegularFiles(root))
@@ -189,7 +194,7 @@ async function verifyLocalizationPackArchive(archive, expectedRoot, expectedVers
         publicKey,
       );
     }
-    console.log(`OK: signed Localization Pack ${expectedVersion} (${languages.length} language(s))`);
+    console.log(`OK: Localization Pack ${expectedVersion} (${languages.length} language(s))`);
     return languages;
   } finally {
     await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -262,67 +267,25 @@ function parseLocalizationCatalog(text) {
   return catalog;
 }
 
-async function verifyLauncherExecutable(path, expectedVersion, publicKey) {
-  const bytes = await readFile(path);
-  if (bytes.length < launcherSignatureMagic.length + 2 + 64 + 1 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
-    fail(`${path} is not a signed Windows launcher executable`);
-  }
-  const magicStart = bytes.length - launcherSignatureMagic.length;
-  if (!bytes.subarray(magicStart).equals(launcherSignatureMagic)) {
-    fail(`${path} does not contain the MojoRecomp launcher signature trailer`);
-  }
-  const versionLengthPosition = magicStart - 2;
-  const versionLength = bytes.readUInt16LE(versionLengthPosition);
-  const signatureStart = versionLengthPosition - 64;
-  const versionStart = signatureStart - versionLength;
-  if (versionLength === 0 || versionStart < 2) {
-    fail(`${path} contains a truncated launcher signature trailer`);
-  }
-  const versionBytes = bytes.subarray(versionStart, signatureStart);
-  const version = versionBytes.toString("utf8");
-  if (version !== expectedVersion || Buffer.byteLength(version, "utf8") !== versionLength) {
-    fail(`${path} signed version ${version} does not match ${expectedVersion}`);
-  }
-  const payload = bytes.subarray(0, versionStart);
-  if (payload[0] !== 0x4d || payload[1] !== 0x5a) {
-    fail(`${path} payload is not a Windows executable`);
-  }
-  const payloadHash = createHash("sha256").update(payload).digest();
-  const message = Buffer.concat([
-    launcherSignatureDomain,
-    versionBytes,
-    Buffer.from([0]),
-    payloadHash,
-  ]);
-  const signature = bytes.subarray(signatureStart, versionLengthPosition);
-  if (!verify(null, message, publicKey, signature)) {
-    fail(`${path} has an invalid Ed25519 launcher signature`);
-  }
-  console.log(`OK: signed launcher executable ${expectedVersion}`);
-}
-
 const versions = await readFile(resolve(projectRoot, "version.toml"), "utf8");
-const launcherVersion = quotedValue(versions, "launcher");
 const runtimeVersion = quotedValue(versions, "cot_runtime");
 const localizationPackVersion = quotedValue(versions, "cot_localization_pack");
 const publicKeyHex = (
   await readFile(resolve(launcherRoot, "release-signing-public-key.hex"), "utf8")
 ).trim();
-if (!/^[0-9a-f]{64}$/.test(publicKeyHex)) fail("Release public key is malformed");
-const publicKey = createPublicKey({
-  key: Buffer.concat([
-    Buffer.from("302a300506032b6570032100", "hex"),
-    Buffer.from(publicKeyHex, "hex"),
-  ]),
-  format: "der",
-  type: "spki",
-});
+if (publicKeyHex && !/^[0-9a-f]{64}$/.test(publicKeyHex)) fail("Release public key is malformed");
+// null selects unsigned release mode.
+const publicKey = publicKeyHex
+  ? createPublicKey({
+    key: Buffer.concat([
+      Buffer.from("302a300506032b6570032100", "hex"),
+      Buffer.from(publicKeyHex, "hex"),
+    ]),
+    format: "der",
+    type: "spki",
+  })
+  : null;
 
-await verifyLauncherExecutable(
-  resolve(releaseRoot, `MojoRecomp-Launcher-${launcherVersion}-windows-x64.exe`),
-  launcherVersion,
-  publicKey,
-);
 await verifyArchive(
   resolve(releaseRoot, `MojoRecomp-COT-Runtime-${runtimeVersion}-windows-x64.zip`),
   `MojoRecomp-COT-Runtime-${runtimeVersion}-windows-x64`,

@@ -1,7 +1,10 @@
-import { createHash, createPrivateKey, createPublicKey, sign as signBytes } from "node:crypto";
+// Packages a COT runtime release: the runtime component, its LGPL
+// corresponding sources, the Localization Pack, and the update catalogs. The
+// launcher is released separately by CI; its published catalog entries are
+// carried into this release's catalog.
+import { createHash, sign as signBytes } from "node:crypto";
 import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { assertCanonicalProjectLicense } from "./project-license.mjs";
 import {
@@ -13,6 +16,13 @@ import {
   validateReleaseChannel,
   validateReleaseDate,
 } from "./release-metadata.mjs";
+import {
+  catalogReleaseBlocks,
+  fetchPublishedCatalog,
+  releaseSigningKey,
+  releaseTargets,
+  runProgram,
+} from "./release-common.mjs";
 
 const launcherRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const projectRoot = resolve(launcherRoot, "..");
@@ -20,19 +30,8 @@ const releaseRoot = resolve(projectRoot, ".release");
 const releaseStateRoot = resolve(projectRoot, ".release-state");
 const privateReleaseSymbolsRoot = resolve(releaseStateRoot, "symbols");
 const releaseHistoryCachePath = resolve(releaseStateRoot, "history/update-catalog.toml");
-const releasePublicKeyPath = resolve(launcherRoot, "release-signing-public-key.hex");
-const defaultReleasePrivateKeyPath = resolve(
-  projectRoot,
-  "release-signing-private.pem",
-);
 const offlinePackageManifest = "mojorecomp-package.toml";
 const offlinePackageSignature = "mojorecomp-package.sig";
-const launcherSignatureMagic = Buffer.from("MOJORECOMP-LAUNCHER-SIG-V1", "ascii");
-const launcherSignatureDomain = Buffer.from("MojoRecomp launcher executable signature v1\0", "utf8");
-const productionRoot = process.env.MOJORECOMP_PRODUCTION_ROOT
-  ? resolve(process.env.MOJORECOMP_PRODUCTION_ROOT)
-  : resolve(projectRoot, "../game/production");
-
 function fail(message) {
   throw new Error(message);
 }
@@ -71,59 +70,6 @@ async function requireFile(path, label) {
 async function sha256(path) {
   const bytes = await readFile(path);
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-async function releaseSigningKey() {
-  const privateKeyPath = process.env.MOJORECOMP_RELEASE_SIGNING_KEY
-    ? resolve(process.env.MOJORECOMP_RELEASE_SIGNING_KEY)
-    : defaultReleasePrivateKeyPath;
-  const privatePem = await readFile(privateKeyPath, "utf8").catch(() => null);
-  if (!privatePem) {
-    fail(
-      `Release signing key is missing: ${privateKeyPath}. ` +
-        "Set MOJORECOMP_RELEASE_SIGNING_KEY or run npm run generate:release-signing-key once.",
-    );
-  }
-  const privateKey = createPrivateKey(privatePem);
-  if (privateKey.asymmetricKeyType !== "ed25519") {
-    fail("The release signing key must be an Ed25519 private key");
-  }
-  const expectedPublicKey = (await readFile(releasePublicKeyPath, "utf8")).trim().toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(expectedPublicKey)) {
-    fail("release-signing-public-key.hex must contain one 32-byte Ed25519 public key");
-  }
-  const publicDer = createPublicKey(privateKey).export({ format: "der", type: "spki" });
-  const actualPublicKey = publicDer.subarray(publicDer.length - 32).toString("hex");
-  if (actualPublicKey !== expectedPublicKey) {
-    fail("The release signing key does not match the public key embedded in the launcher");
-  }
-  return privateKey;
-}
-
-async function writeSignedLauncherExecutable(source, destination, version) {
-  const payload = await readFile(source);
-  if (payload.length < 2 || payload[0] !== 0x4d || payload[1] !== 0x5a) {
-    fail("Validated launcher is not a Windows executable");
-  }
-  const versionBytes = Buffer.from(version, "utf8");
-  if (versionBytes.length === 0 || versionBytes.length > 0xffff) {
-    fail("Launcher version is too long for the signed executable trailer");
-  }
-  const payloadHash = createHash("sha256").update(payload).digest();
-  const message = Buffer.concat([
-    launcherSignatureDomain,
-    versionBytes,
-    Buffer.from([0]),
-    payloadHash,
-  ]);
-  const signature = signBytes(null, message, await releaseSigningKey());
-  if (signature.length !== 64) fail("Ed25519 produced an invalid launcher signature length");
-  const versionLength = Buffer.alloc(2);
-  versionLength.writeUInt16LE(versionBytes.length);
-  await writeFile(
-    destination,
-    Buffer.concat([payload, versionBytes, signature, versionLength, launcherSignatureMagic]),
-  );
 }
 
 function compatibilityRequirementsToml(requirements, tableName) {
@@ -170,9 +116,10 @@ async function writeSignedPackageManifest(root, metadata, requirements = []) {
     .join("\n\n");
   const requirementBlocks = compatibilityRequirementsToml(requirements, "require");
   const manifest = `schema_version = 2\n${metadata.trim()}${requirementBlocks ? `\n\n${requirementBlocks}` : ""}\n\n${fileBlocks}\n`;
-  const signature = signBytes(null, Buffer.from(manifest, "utf8"), await releaseSigningKey());
-  if (signature.length !== 64) fail("Ed25519 produced an invalid release signature length");
   await writeFile(resolve(root, offlinePackageManifest), manifest, "utf8");
+  if (!signingKey) return;
+  const signature = signBytes(null, Buffer.from(manifest, "utf8"), signingKey);
+  if (signature.length !== 64) fail("Ed25519 produced an invalid release signature length");
   await writeFile(resolve(root, offlinePackageSignature), `${signature.toString("hex")}\n`, "utf8");
 }
 
@@ -193,9 +140,10 @@ version = ${JSON.stringify(metadata.version)}
 
 ${languageBlocks}
 `;
-  const signature = signBytes(null, Buffer.from(manifest, "utf8"), await releaseSigningKey());
-  if (signature.length !== 64) fail("Ed25519 produced an invalid Localization Pack signature length");
   await writeFile(resolve(root, "localization-pack.toml"), manifest, "utf8");
+  if (!signingKey) return;
+  const signature = signBytes(null, Buffer.from(manifest, "utf8"), signingKey);
+  if (signature.length !== 64) fail("Ed25519 produced an invalid Localization Pack signature length");
   await writeFile(resolve(root, "localization-pack.sig"), `${signature.toString("hex")}\n`, "utf8");
 }
 
@@ -315,29 +263,7 @@ function assertSafeReleaseRoot() {
 }
 
 function runTar(args, cwd) {
-  const result = spawnSync("tar.exe", args, {
-    cwd,
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  if (result.error) fail(`Could not start tar.exe: ${result.error.message}`);
-  if (result.status !== 0) {
-    fail(`tar.exe failed (${result.status}): ${(result.stderr || result.stdout).trim()}`);
-  }
-  return result.stdout;
-}
-
-function runProgram(program, args, cwd) {
-  const result = spawnSync(program, args, {
-    cwd,
-    encoding: "utf8",
-    windowsHide: true,
-  });
-  if (result.error) fail(`Could not start ${program}: ${result.error.message}`);
-  if (result.status !== 0) {
-    fail(`${program} failed (${result.status}): ${(result.stderr || result.stdout).trim()}`);
-  }
-  return result.stdout.trim();
+  return runProgram("tar", args, cwd);
 }
 
 async function previousReleaseHistory(catalogUrl, runtimeVersion) {
@@ -404,23 +330,6 @@ async function previousReleaseHistory(catalogUrl, runtimeVersion) {
   }
   console.log(`Preserving ${runtimeHistory.length} previous signed COT runtime release(s) in the update catalog.`);
   return { runtimeHistory };
-}
-
-function launcherCatalogBlock(release) {
-  return `[[release]]
-id = "launcher"
-kind = "launcher"
-version = ${JSON.stringify(release.version)}
-platform = "windows"
-arch = "x86_64"
-url = ${JSON.stringify(release.url)}
-size = ${release.size}
-sha256 = ${JSON.stringify(release.sha256)}
-published = ${JSON.stringify(release.published)}
-notes_url = ${JSON.stringify(release.notesUrl)}
-package = "portable-exe"
-
-[release.compatibility]`;
 }
 
 function runtimeCatalogBlock(release) {
@@ -501,7 +410,7 @@ async function stageCorrespondingSource({
   bundleRoot,
   additionalNotices = [],
 }) {
-  const actualCommit = runProgram("git.exe", ["rev-parse", "HEAD"], repository);
+  const actualCommit = runProgram("git", ["rev-parse", "HEAD"], repository);
   if (actualCommit.toLowerCase() !== expectedCommit.toLowerCase()) {
     fail(`${label} source is at ${actualCommit}, expected ${expectedCommit}`);
   }
@@ -512,7 +421,7 @@ async function stageCorrespondingSource({
   const sourceTar = resolve(releaseRoot, `.${id}-source.tmp.tar`);
   await mkdir(sourceRoot, { recursive: true });
   runProgram(
-    "git.exe",
+    "git",
     ["archive", "--format=tar", "-o", sourceTar, expectedCommit],
     repository,
   );
@@ -600,7 +509,6 @@ if (suiteVersion !== launcherVersion) {
   fail(`Suite ${suiteVersion} and launcher ${launcherVersion} must match`);
 }
 
-const launcherExe = resolve(productionRoot, "mojorecomp-launcher.exe");
 const projectLicense = resolve(projectRoot, "LICENSE");
 const licenseRoot = resolve(launcherRoot, "resources/licenses");
 const runtimeNoticeFiles = [
@@ -636,7 +544,6 @@ const cotRuntimeFiles = [
 ];
 const cotRuntimePdb = resolve(projectRoot, "runtime/build-smoke/cot-runtime.pdb");
 const cotRuntimeRequirements = [];
-await requireFile(launcherExe, "Validated production launcher");
 await requireFile(projectLicense, "MojoRecomp ISC license");
 assertCanonicalProjectLicense(await readFile(projectLicense, "utf8"));
 for (const [source, name] of cotRuntimeFiles) {
@@ -662,7 +569,12 @@ if (!cotRuntimeMap.includes("mojorecomp-lzx:mojorecomp-lzx.dll")) {
 if (cotRuntimeMap.includes("XenonUtils:lzxd.c.obj")) {
   fail("Runtime still contains statically linked libmspack LZX object code");
 }
-await releaseSigningKey();
+// null selects unsigned release mode (empty release-signing-public-key.hex).
+const signingKey = await releaseSigningKey();
+// Files every signed or unsigned package carries besides its payload.
+const packageMetadataFiles = signingKey
+  ? [offlinePackageManifest, offlinePackageSignature]
+  : [offlinePackageManifest];
 
 assertSafeReleaseRoot();
 await rm(releaseRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
@@ -785,12 +697,7 @@ for (const [, name] of cotRuntimeFiles) {
     fail("COT runtime component archive is missing " + name);
   }
 }
-for (const name of [
-  "LICENSE",
-  "THIRD_PARTY_NOTICES.txt",
-  offlinePackageManifest,
-  offlinePackageSignature,
-]) {
+for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.txt", ...packageMetadataFiles]) {
   if (!runtimeArchiveListing.some((entry) => entry === name || entry.endsWith("/" + name))) {
     fail("COT runtime component archive is missing " + name);
   }
@@ -801,7 +708,7 @@ if (runtimeArchiveListing.some((entry) => /(^|\/)licenses\//i.test(entry))) {
 const runtimeArchiveHash = await sha256(runtimeArchivePath);
 const runtimeArchiveSize = (await stat(runtimeArchivePath)).size;
 const cotRuntimeExecutableHash = await sha256(cotRuntimeFiles[0][0]);
-const cotRuntimeBuildId = `git-${runProgram("git.exe", ["rev-parse", "--short=12", "HEAD"], projectRoot)}`;
+const cotRuntimeBuildId = `git-${runProgram("git", ["rev-parse", "--short=12", "HEAD"], projectRoot)}`;
 const runtimeSymbolsRoot = resolve(
   privateReleaseSymbolsRoot,
   "cot",
@@ -894,12 +801,7 @@ min_launcher = ${JSON.stringify(launcherVersion)}`,
       published: releaseDate,
       notesUrl: updateNotesUrl,
       unpackedSize,
-      requiredFiles: [
-        ...language.requiredFiles,
-        "CREDITS.txt",
-        offlinePackageManifest,
-        offlinePackageSignature,
-      ],
+      requiredFiles: [...language.requiredFiles, "CREDITS.txt", ...packageMetadataFiles],
       gameId: "cot",
       locale: language.locale,
       displayName: language.displayName,
@@ -942,13 +844,7 @@ min_launcher = ${JSON.stringify(launcherVersion)}`,
   );
 }
 
-const launcherReleaseName = `MojoRecomp-Launcher-${launcherVersion}-windows-x64.exe`;
-const launcherReleasePath = resolve(releaseRoot, launcherReleaseName);
-await writeSignedLauncherExecutable(launcherExe, launcherReleasePath, launcherVersion);
-const launcherReleaseHash = await sha256(launcherReleasePath);
-const launcherReleaseSize = (await stat(launcherReleasePath)).size;
 const checksumEntries = [
-  { file: launcherReleaseName, sha256: launcherReleaseHash },
   { file: runtimeArchiveName, sha256: runtimeArchiveHash },
   { file: lgplSourcesArchiveName, sha256: lgplSourcesArchiveHash },
 ];
@@ -962,14 +858,13 @@ if (updateBaseUrl) {
     configuredCatalogUrl,
     cotRuntimeVersion,
   );
-  const launcherReleases = [{
-    version: launcherVersion,
-    url: `${updateBaseUrl}/${launcherReleaseName}`,
-    size: launcherReleaseSize,
-    sha256: launcherReleaseHash,
-    published: releaseDate,
-    notesUrl: updateNotesUrl,
-  }];
+  // The launcher is released by CI; keep the launcher entries already published.
+  const launcherBlocks = catalogReleaseBlocks(
+    await fetchPublishedCatalog(configuredCatalogUrl, releaseTargets.windows.catalogAsset),
+  ).filter((block) => block.kind === "launcher" && block.platform === "windows");
+  if (launcherBlocks.length === 0) {
+    console.warn("No published Windows launcher release was found; the catalog lists only the runtime.");
+  }
   const runtimeReleases = [
     {
       version: cotRuntimeVersion,
@@ -979,11 +874,7 @@ if (updateBaseUrl) {
       published: releaseDate,
       notesUrl: updateNotesUrl,
       unpackedSize: runtimeUnpackedSize,
-      requiredFiles: [
-        ...cotRuntimeFiles.map(([, name]) => name),
-        offlinePackageManifest,
-        offlinePackageSignature,
-      ],
+      requiredFiles: [...cotRuntimeFiles.map(([, name]) => name), ...packageMetadataFiles],
       minLauncher: launcherVersion,
       maxLauncher: null,
       requirements: cotRuntimeRequirements,
@@ -996,9 +887,7 @@ if (updateBaseUrl) {
   const catalog = `schema_version = 1
 channel = "${releaseChannel}"
 
-${launcherReleases.map(launcherCatalogBlock).join("\n\n")}
-
-${runtimeReleases.map(runtimeCatalogBlock).join("\n\n")}
+${[...launcherBlocks.map((block) => block.text), ...runtimeReleases.map(runtimeCatalogBlock)].join("\n\n")}
 `;
   await writeFile(catalogPath, catalog, "utf8");
   await mkdir(dirname(releaseHistoryCachePath), { recursive: true });
@@ -1035,6 +924,6 @@ await writeFile(
   "utf8",
 );
 
-console.log(`Launcher executable: ${launcherReleasePath}`);
-console.log(`SHA-256: ${launcherReleaseHash}`);
+console.log(`COT runtime ${cotRuntimeVersion}: ${runtimeArchivePath}`);
+console.log(`SHA-256: ${runtimeArchiveHash}${signingKey ? "" : " (unsigned release mode)"}`);
 console.log("Platform: Windows x64 (x86 and ARM64 are not supported)");
