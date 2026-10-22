@@ -3,10 +3,10 @@
   <h1>MojoRecomp</h1>
   <p>Native Windows ports of the Crash Bandicoot Titans games.</p>
   <p>
-    <a href="https://github.com/OAleex/MojoRecomp/releases/latest/download/MojoRecomp-Launcher-1.1.0-windows-x64.exe"><img src="https://img.shields.io/badge/Download-Launcher-2563eb?style=for-the-badge&logo=windows11&logoColor=white" alt="Download MojoRecomp Launcher"></a>
-    <a href="https://github.com/OAleex/MojoRecomp/releases"><img src="https://img.shields.io/github/downloads/OAleex/MojoRecomp/total?style=for-the-badge&logo=github&label=Release%20downloads" alt="GitHub release downloads"></a>
-    <a href="https://github.com/OAleex/MojoRecomp/releases"><img src="https://img.shields.io/github/v/release/OAleex/MojoRecomp?include_prereleases&sort=semver&style=for-the-badge&label=Latest%20release" alt="Latest GitHub release"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/OAleex/MojoRecomp?style=for-the-badge&label=License" alt="ISC License"></a>
+    <a href="https://github.com/vinicgobbi/MojoRecomp/releases/latest/download/MojoRecomp-Launcher-1.1.0-windows-x64.exe"><img src="https://img.shields.io/badge/Download-Launcher-2563eb?style=for-the-badge&logo=windows11&logoColor=white" alt="Download MojoRecomp Launcher"></a>
+    <a href="https://github.com/vinicgobbi/MojoRecomp/releases"><img src="https://img.shields.io/github/downloads/vinicgobbi/MojoRecomp/total?style=for-the-badge&logo=github&label=Release%20downloads" alt="GitHub release downloads"></a>
+    <a href="https://github.com/vinicgobbi/MojoRecomp/releases"><img src="https://img.shields.io/github/v/release/vinicgobbi/MojoRecomp?include_prereleases&sort=semver&style=for-the-badge&label=Latest%20release" alt="Latest GitHub release"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/vinicgobbi/MojoRecomp?style=for-the-badge&label=License" alt="ISC License"></a>
   </p>
 </div>
 

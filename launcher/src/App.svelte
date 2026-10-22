@@ -1786,7 +1786,7 @@
                   <div><span>Crash: Mind Over Mutant Runtime</span><strong>{momGame?.runtime_version ?? "0.0.0-dev"}</strong></div>
                   <div>
                     <span>Official Repository</span>
-                    <button type="button" class="status-link" onclick={() => openUpdateUrl("https://github.com/OAleex/MojoRecomp")}>github.com/OAleex/MojoRecomp</button>
+                    <button type="button" class="status-link" onclick={() => openUpdateUrl("https://github.com/vinicgobbi/MojoRecomp")}>github.com/vinicgobbi/MojoRecomp</button>
                   </div>
                 </div>
               </section>
@@ -1882,8 +1882,8 @@
               <div class="panel-heading compact"><div><h2>Report an issue</h2></div></div>
               <p class="support-copy">Report problems on the official GitHub repository. Attach a Support Package when it is relevant.</p>
               <div class="button-row report-actions">
-                <button type="button" class="secondary-button" onclick={() => openUpdateUrl("https://github.com/OAleex/MojoRecomp/issues/new?title=%5BLauncher%5D%20")}>Report Launcher Issue</button>
-                <button type="button" class="secondary-button" onclick={() => openUpdateUrl("https://github.com/OAleex/MojoRecomp/issues/new?title=%5BGame%5D%20")}>Report Game Issue</button>
+                <button type="button" class="secondary-button" onclick={() => openUpdateUrl("https://github.com/vinicgobbi/MojoRecomp/issues/new?title=%5BLauncher%5D%20")}>Report Launcher Issue</button>
+                <button type="button" class="secondary-button" onclick={() => openUpdateUrl("https://github.com/vinicgobbi/MojoRecomp/issues/new?title=%5BGame%5D%20")}>Report Game Issue</button>
               </div>
             </section>
 

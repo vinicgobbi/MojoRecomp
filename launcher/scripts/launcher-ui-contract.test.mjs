@@ -214,7 +214,7 @@ test("hardcoded external links stay on the official HTTPS repository", () => {
     const url = new URL(value);
     assert.equal(url.protocol, "https:", `external launcher link must use HTTPS: ${value}`);
     assert.equal(url.hostname, "github.com", `external launcher link must use github.com: ${value}`);
-    assert.ok(url.pathname.startsWith("/OAleex/MojoRecomp"), `external launcher link left the official repository: ${value}`);
+    assert.ok(url.pathname.startsWith("/vinicgobbi/MojoRecomp"), `external launcher link left the official repository: ${value}`);
   }
 });
 
