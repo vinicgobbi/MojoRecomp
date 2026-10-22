@@ -1,0 +1,160 @@
+# Builds the launcher for Windows and Linux from a launcher tag (vX.Y.Z) and
+# publishes the GitHub release with both launchers and their update catalogs.
+# Called by release-bump.yml after a launcher bump, or run manually for an
+# existing tag. The COT runtime is released separately with release.bat
+# because it is built from the user's own game files.
+name: Launcher release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Launcher tag to build, for example v1.2.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Launcher tag to build, for example v1.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-latest
+          # The oldest supported runner keeps the AppImage compatible with
+          # older glibc releases.
+          - target: linux-x64
+            os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: launcher
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Check the tag matches the launcher version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version=$(sed -n 's/^launcher = "\(.*\)"$/\1/p' ../version.toml)
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG does not match launcher version $version" >&2
+            exit 1
+          fi
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf file
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher/src-tauri
+
+      - run: npm ci
+
+      - run: npm run check
+
+      - run: npm run test:release-metadata
+
+      - name: Run launcher unit tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - run: node scripts/validate-release.mjs --metadata-only
+
+      - name: Build the launcher
+        env:
+          # linuxdeploy runs as an AppImage; runners have no FUSE.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: node scripts/build-tauri-release.mjs
+
+      - run: npm run package:launcher-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ matrix.target }}
+          path: .release/launcher/${{ matrix.target }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: launcher-*
+          path: .release/launcher
+
+      - name: Arrange per-platform outputs
+        run: |
+          for directory in .release/launcher/launcher-*; do
+            mv "$directory" ".release/launcher/${directory##*/launcher-}"
+          done
+          ls -R .release/launcher
+
+      - name: Assemble the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MOJORECOMP_UPDATE_BASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ inputs.tag }}
+          MOJORECOMP_UPDATE_NOTES_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ inputs.tag }}
+        run: node launcher/scripts/assemble-launcher-release.mjs
+
+      - name: Extract release notes from the changelog
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          awk -v heading="## $TAG " '
+            index($0, heading) == 1 { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' launcher/CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Launcher release $TAG." > release-notes.md
+          fi
+          cat release-notes.md
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          prerelease=()
+          case "$TAG" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+          gh release create "$TAG" .release/launcher-release/* \
+            --verify-tag \
+            --title "MojoRecomp Launcher ${TAG#v}" \
+            --notes-file release-notes.md \
+            "${prerelease[@]}"

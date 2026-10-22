@@ -1,6 +1,8 @@
 # Bumps each MojoRecomp release line from the Conventional Commits that changed
 # it since its last tag, updates its CHANGELOG, and pushes the release commit
 # and tag. Components and their paths are defined in .cz.<component>.toml.
+# A new launcher tag is then built and published by launcher-release.yml; tags
+# pushed with GITHUB_TOKEN cannot start other workflows on their own.
 name: Release bump
 
 on:
@@ -26,6 +28,8 @@ jobs:
     # covers release commits pushed with another credential.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     runs-on: ubuntu-latest
+    outputs:
+      launcher_tag: ${{ steps.tags.outputs.launcher_tag }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -43,6 +47,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Record existing launcher tags
+        run: git tag --list 'v*' | sort > "$RUNNER_TEMP/launcher-tags-before"
+
       # Exit code 21 (NO_INCREMENT) means the component has nothing to release.
       - name: Bump launcher
         run: cz --no-raise 21 --config .cz.launcher.toml bump --yes
@@ -57,3 +64,17 @@ jobs:
 
       - name: Push release commits and tags
         run: git push --atomic --follow-tags origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Report the new launcher tag
+        id: tags
+        run: |
+          git tag --list 'v*' | sort > "$RUNNER_TEMP/launcher-tags-after"
+          tag=$(comm -13 "$RUNNER_TEMP/launcher-tags-before" "$RUNNER_TEMP/launcher-tags-after")
+          echo "launcher_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  launcher-release:
+    needs: bump
+    if: ${{ needs.bump.outputs.launcher_tag != '' }}
+    uses: ./.github/workflows/launcher-release.yml
+    with:
+      tag: ${{ needs.bump.outputs.launcher_tag }}

@@ -130,7 +130,8 @@ owned by another rights holder.
 - `.cz.toml`, `.cz.<component>.toml`, `tools/commitizen_mojorecomp/`: commit
   message rules, per-component release lines, and the Commitizen plugin that
   attributes commits to components and writes versions.
-- `.github/workflows/`: CI for commit message checks and release bumps.
+- `.github/workflows/`: CI for commit message checks, release bumps, and the
+  launcher release build.
 - `launcher/CHANGELOG.md`, `runtime/CHANGELOG-COT.md`: generated changelogs.
 
 Avoid adding planning diaries, migration reports, agent handoffs, or duplicate
@@ -154,6 +155,19 @@ belongs there, and create new documentation only when the owner asks for it.
   its changelog, and pushes the release commit and tag. Do not edit release
   versions or generated changelog entries by hand; fix the commit history or
   configuration instead.
+- A new launcher tag is built for Windows (portable `.exe`) and Linux
+  (AppImage) and published as a GitHub release by `launcher-release.yml`.
+  The COT runtime is built from the user's own game files, so it is never
+  built in CI: its release (`cot-runtime-vX.Y.Z`) is produced locally with
+  `release.bat` and published by the owner. Each release publishes complete
+  update catalogs and carries the other component's published entries.
+- These workflows are the owner-approved publishing path. Agents still never
+  push, tag, or publish releases themselves without an explicit request.
+- Releases are currently unsigned: `launcher/release-signing-public-key.hex` is
+  empty, which selects the launcher's unsigned release mode. Putting a public
+  key back, with the private key supplied through
+  `MOJORECOMP_RELEASE_SIGNING_KEY`, restores signed releases. Do not treat the
+  unsigned mode as permanent or weaken it further.
 - `version.toml` stays the source of truth. Any other file that embeds a
   component version must be listed in that line's `extras.version_mirrors`.
   The README download link and status table are updated when a release is
@@ -273,7 +287,7 @@ setup.bat
 tools\analyze.bat
 tools\recompile.bat
 build-smoke.bat
-release.bat
+release.bat          (COT runtime release candidate)
 ```
 
 When a native replacement lands, replace its entry here instead of listing
