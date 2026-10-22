@@ -28,12 +28,13 @@ jobs:
         include:
           # The windows-clang-cl-tests preset expects the local
           # thirdparty/llvm22 toolchain, so CI uses the runner's ClangCL.
+          # No -G: CMake picks the newest Visual Studio on the runner image.
           - target: windows-x64
             os: windows-latest
             workdir: .
             configure: >-
-              -S runtime -B runtime/build-ci -G "Visual Studio 17 2022" -A x64
-              -T ClangCL -DMOJORECOMP_GUEST_IMAGE=OFF
+              -S runtime -B runtime/build-ci -A x64 -T ClangCL
+              -DMOJORECOMP_GUEST_IMAGE=OFF
             build: --build runtime/build-ci --config Release --parallel
             test: --test-dir runtime/build-ci -C Release --output-on-failure
           - target: linux-x64
