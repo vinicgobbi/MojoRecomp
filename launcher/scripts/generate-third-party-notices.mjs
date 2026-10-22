@@ -9,13 +9,18 @@ const projectRoot = resolve(launcherRoot, "..");
 const licensesRoot = resolve(launcherRoot, "resources/licenses");
 const overridesRoot = resolve(launcherRoot, "resources/license-overrides");
 const cargoManifest = resolve(launcherRoot, "src-tauri/Cargo.toml");
-const targetTriple = "x86_64-pc-windows-msvc";
+// The launcher ships for both hosts; the notices cover the union of their
+// Cargo dependency graphs so one committed file is correct for either build.
+const targetTriples = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"];
 
 const licenseNamePattern = /^(?:license|licence|copying|notice|unlicense)(?:[._-].*)?$/i;
 
 const cargoOverrides = new Map([
   ["alloc-stdlib", ["alloc-stdlib-BSD-3-Clause.txt"]],
   ["defmt-parser", ["defmt-MIT.txt", "defmt-Apache-2.0.txt"]],
+  ["dlopen2", ["dlopen2-MIT.txt"]],
+  ["dlopen2_derive", ["dlopen2-MIT.txt"]],
+  ["libappindicator-sys", ["libappindicator-rs-MIT.txt", "libappindicator-rs-Apache-2.0.txt"]],
   ["selectors", ["MPL-2.0.txt"]],
   ["tauri-plugin", ["../licenses/Tauri-API-MIT.txt", "../licenses/Tauri-API-APACHE-2.0.txt"]],
   ["unic-char-property", ["rust-unic-MIT.txt", "rust-unic-Apache-2.0.txt"]],
@@ -30,7 +35,9 @@ const cargoOverrides = new Map([
 
 const npmOverrides = new Map([
   ["@rolldown/binding-win32-x64-msvc", ["rolldown-MIT.txt"]],
+  ["@rolldown/binding-linux-x64-gnu", ["rolldown-MIT.txt"]],
   ["@tauri-apps/cli-win32-x64-msvc", ["../licenses/Tauri-API-MIT.txt", "../licenses/Tauri-API-APACHE-2.0.txt"]],
+  ["@tauri-apps/cli-linux-x64-gnu", ["../licenses/Tauri-API-MIT.txt", "../licenses/Tauri-API-APACHE-2.0.txt"]],
 ]);
 
 function normalizeText(text) {
@@ -161,7 +168,7 @@ function cargoReachable(metadata) {
   return roles;
 }
 
-async function cargoPackages() {
+function cargoMetadata(targetTriple) {
   const raw = execFileSync(
     "cargo",
     [
@@ -178,9 +185,19 @@ async function cargoPackages() {
       maxBuffer: 32 * 1024 * 1024,
     },
   );
-  const metadata = JSON.parse(raw);
-  const roles = cargoReachable(metadata);
-  const byId = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]));
+  return JSON.parse(raw);
+}
+
+async function cargoPackages() {
+  const roles = new Map();
+  const byId = new Map();
+  for (const targetTriple of targetTriples) {
+    const metadata = cargoMetadata(targetTriple);
+    for (const pkg of metadata.packages) byId.set(pkg.id, pkg);
+    for (const [id, role] of cargoReachable(metadata)) {
+      roles.set(id, roles.get(id) === "runtime" ? "runtime" : role);
+    }
+  }
   const output = [];
 
   for (const [id, role] of [...roles.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -250,7 +267,7 @@ async function npmPackages() {
   return output;
 }
 
-function renderNotice(title, packages) {
+function renderNotice(title, packages, target) {
   const textByHash = new Map();
   for (const pkg of packages) {
     pkg.textIds = pkg.texts.map(({ text }) => {
@@ -271,7 +288,7 @@ function renderNotice(title, packages) {
     title,
     "=".repeat(title.length),
     "",
-    `Target: ${targetTriple}`,
+    `Target: ${target}`,
     "This file is generated from the locked local dependency graph. Runtime entries are",
     "reachable through normal dependencies; build entries are retained separately for",
     "source/build transparency. Duplicate license bodies are stored once and referenced",
@@ -315,11 +332,11 @@ await mkdir(licensesRoot, { recursive: true });
 const [cargo, npm] = await Promise.all([cargoPackages(), npmPackages()]);
 const cargoNoticeChanged = await writeTextIfChanged(
   resolve(licensesRoot, "Cargo-ThirdPartyNotices.txt"),
-  renderNotice("MojoRecomp Cargo Third-Party Notices", cargo),
+  renderNotice("MojoRecomp Cargo Third-Party Notices", cargo, targetTriples.join(", ")),
 );
 const npmNoticeChanged = await writeTextIfChanged(
   resolve(licensesRoot, "Npm-ThirdPartyNotices.txt"),
-  renderNotice("MojoRecomp npm Third-Party Notices", npm),
+  renderNotice("MojoRecomp npm Third-Party Notices", npm, `${process.platform}-${process.arch} build host`),
 );
 
 console.log(`${cargoNoticeChanged ? "Generated" : "Unchanged"} Cargo notices: ${cargo.length} packages`);
