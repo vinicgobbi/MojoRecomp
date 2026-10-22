@@ -785,9 +785,17 @@ fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Strin
     Ok(decoded)
 }
 
-fn release_verifying_key() -> Result<VerifyingKey, String> {
+/// The key that official packages must be signed with. An empty
+/// release-signing-public-key.hex selects unsigned release mode: downloads are
+/// still bound to the catalog size and SHA-256, and packages to their manifest
+/// hashes, but no Ed25519 signature is required.
+fn release_verifying_key() -> Result<Option<VerifyingKey>, String> {
+    if RELEASE_SIGNING_PUBLIC_KEY_HEX.trim().is_empty() {
+        return Ok(None);
+    }
     let bytes = decode_hex::<32>(RELEASE_SIGNING_PUBLIC_KEY_HEX, "Release public key")?;
     VerifyingKey::from_bytes(&bytes)
+        .map(Some)
         .map_err(|_| "The embedded release public key is invalid".to_string())
 }
 
@@ -805,7 +813,7 @@ fn launcher_exe_signature_message(version: &str, payload_sha256: &[u8; 32]) -> V
 fn verify_signed_launcher_executable_with_key(
     path: &Path,
     expected_version: Option<&str>,
-    verifying_key: &VerifyingKey,
+    verifying_key: Option<&VerifyingKey>,
 ) -> Result<String, String> {
     if let Some(expected) = expected_version {
         Version::parse(expected)
@@ -813,6 +821,15 @@ fn verify_signed_launcher_executable_with_key(
     }
     let bytes =
         fs::read(path).map_err(|error| format!("Could not read launcher executable: {error}"))?;
+    let Some(verifying_key) = verifying_key else {
+        // Unsigned release mode: the caller already matched the catalog hash.
+        if !bytes.starts_with(platform::LAUNCHER_EXECUTABLE_MAGIC) {
+            return Err("Launcher update is not an executable for this platform".into());
+        }
+        return expected_version
+            .map(str::to_string)
+            .ok_or_else(|| "Unsigned launcher executables do not record their version".to_string());
+    };
     let minimum = LAUNCHER_EXE_SIGNATURE_MAGIC.len() + 2 + 64 + 1;
     if bytes.len() < minimum || !bytes.starts_with(platform::LAUNCHER_EXECUTABLE_MAGIC) {
         return Err("Launcher update is not a valid signed launcher executable for this platform".into());
@@ -876,13 +893,30 @@ pub fn verify_signed_launcher_executable(
     verify_signed_launcher_executable_with_key(
         path,
         Some(expected_version),
-        &release_verifying_key()?,
+        release_verifying_key()?.as_ref(),
     )
     .map(|_| ())
 }
 
-pub fn signed_launcher_executable_version(path: &Path) -> Result<String, String> {
-    verify_signed_launcher_executable_with_key(path, None, &release_verifying_key()?)
+/// Version of the launcher prepared by `prepare_launcher_replacement`.
+pub fn prepared_launcher_version(source_root: &Path) -> Result<String, String> {
+    let artifact = source_root.join(platform::LAUNCHER_ARTIFACT_NAME);
+    let verifying_key = release_verifying_key()?;
+    let recorded_version = if verifying_key.is_some() {
+        None
+    } else {
+        // Unsigned executables carry no version; use the one recorded when the
+        // download was verified against the catalog.
+        let ready_root = source_root
+            .parent()
+            .ok_or_else(|| "Launcher replacement staging has no parent directory".to_string())?;
+        Some(read_toml::<ReadyLauncherPackage>(&ready_root.join("ready.toml"))?.version)
+    };
+    verify_signed_launcher_executable_with_key(
+        &artifact,
+        recorded_version.as_deref(),
+        verifying_key.as_ref(),
+    )
 }
 
 fn verify_offline_manifest_signature_with_key(
@@ -948,7 +982,7 @@ fn expected_offline_package_root(manifest: &OfflinePackageManifest) -> Result<St
 
 fn inspect_offline_zip_manifest_with_key(
     path: &Path,
-    verifying_key: &VerifyingKey,
+    verifying_key: Option<&VerifyingKey>,
 ) -> Result<(OfflinePackageManifest, u64), String> {
     let file = File::open(path)
         .map_err(|error| format!("Could not open offline update package: {error}"))?;
@@ -1060,9 +1094,11 @@ fn inspect_offline_zip_manifest_with_key(
             "Offline update ZIP is missing {OFFLINE_PACKAGE_MANIFEST}"
         ));
     };
-    let signature = package_signature
-        .ok_or_else(|| format!("Offline update ZIP is missing {OFFLINE_PACKAGE_SIGNATURE}"))?;
-    verify_offline_manifest_signature_with_key(&manifest_bytes, &signature, verifying_key)?;
+    if let Some(verifying_key) = verifying_key {
+        let signature = package_signature
+            .ok_or_else(|| format!("Offline update ZIP is missing {OFFLINE_PACKAGE_SIGNATURE}"))?;
+        verify_offline_manifest_signature_with_key(&manifest_bytes, &signature, verifying_key)?;
+    }
     if manifest.schema_version != OFFLINE_PACKAGE_SCHEMA_VERSION {
         return Err(format!(
             "Unsupported offline package schema version: {}",
@@ -1152,7 +1188,7 @@ pub fn inspect_offline_package(
     current_launcher_version: &str,
 ) -> Result<ComponentRelease, String> {
     let verifying_key = release_verifying_key()?;
-    inspect_offline_package_with_key(path, current_launcher_version, &verifying_key)
+    inspect_offline_package_with_key(path, current_launcher_version, verifying_key.as_ref())
 }
 
 pub fn extract_offline_localization_pack(
@@ -1160,13 +1196,13 @@ pub fn extract_offline_localization_pack(
     destination_root: &Path,
 ) -> Result<OfflineLocalizationPack, String> {
     let verifying_key = release_verifying_key()?;
-    extract_offline_localization_pack_with_key(path, destination_root, &verifying_key)
+    extract_offline_localization_pack_with_key(path, destination_root, verifying_key.as_ref())
 }
 
 fn extract_offline_localization_pack_with_key(
     path: &Path,
     destination_root: &Path,
-    verifying_key: &VerifyingKey,
+    verifying_key: Option<&VerifyingKey>,
 ) -> Result<OfflineLocalizationPack, String> {
     let file =
         File::open(path).map_err(|error| format!("Could not open Localization Pack: {error}"))?;
@@ -1275,9 +1311,11 @@ fn extract_offline_localization_pack_with_key(
             "Localization Pack is missing {LOCALIZATION_PACK_MANIFEST}"
         ));
     };
-    let signature = signature
-        .ok_or_else(|| format!("Localization Pack is missing {LOCALIZATION_PACK_SIGNATURE}"))?;
-    verify_offline_manifest_signature_with_key(&manifest_bytes, &signature, verifying_key)?;
+    if let Some(verifying_key) = verifying_key {
+        let signature = signature
+            .ok_or_else(|| format!("Localization Pack is missing {LOCALIZATION_PACK_SIGNATURE}"))?;
+        verify_offline_manifest_signature_with_key(&manifest_bytes, &signature, verifying_key)?;
+    }
     if manifest.schema_version != LOCALIZATION_PACK_SCHEMA_VERSION {
         return Err(format!(
             "Unsupported Localization Pack schema version: {}",
@@ -1447,7 +1485,7 @@ pub fn inspect_signed_release_artifact(
         path,
         current_launcher_version,
         expected,
-        &verifying_key,
+        verifying_key.as_ref(),
     )
 }
 
@@ -1455,7 +1493,7 @@ fn inspect_signed_release_artifact_with_key(
     path: &Path,
     current_launcher_version: &str,
     expected: &ComponentRelease,
-    verifying_key: &VerifyingKey,
+    verifying_key: Option<&VerifyingKey>,
 ) -> Result<ComponentRelease, String> {
     let signed = inspect_offline_package_with_key(path, current_launcher_version, verifying_key)?;
     let expected_size = expected
@@ -1505,7 +1543,7 @@ fn inspect_signed_release_artifact_with_key(
 fn inspect_offline_package_with_key(
     path: &Path,
     current_launcher_version: &str,
-    verifying_key: &VerifyingKey,
+    verifying_key: Option<&VerifyingKey>,
 ) -> Result<ComponentRelease, String> {
     let (manifest, unpacked_size) = inspect_offline_zip_manifest_with_key(path, verifying_key)?;
     if !targets_host(&manifest.kind, &manifest.platform, &manifest.arch) {
@@ -2499,12 +2537,12 @@ impl ComponentStore {
 
     pub fn prepare_launcher_replacement(&self) -> Result<PreparedLauncherReplacement, String> {
         let verifying_key = release_verifying_key()?;
-        self.prepare_launcher_replacement_with_key(&verifying_key)
+        self.prepare_launcher_replacement_with_key(verifying_key.as_ref())
     }
 
     fn prepare_launcher_replacement_with_key(
         &self,
-        verifying_key: &VerifyingKey,
+        verifying_key: Option<&VerifyingKey>,
     ) -> Result<PreparedLauncherReplacement, String> {
         let ready_root = self.launcher_ready_root_path();
         let ready = read_toml::<ReadyLauncherPackage>(&ready_root.join("ready.toml"))?;
@@ -2831,13 +2869,13 @@ impl ComponentStore {
 
     pub fn stage_launcher_ready(&self, release: &ComponentRelease) -> Result<PathBuf, String> {
         let verifying_key = release_verifying_key()?;
-        self.stage_launcher_ready_with_key(release, &verifying_key)
+        self.stage_launcher_ready_with_key(release, verifying_key.as_ref())
     }
 
     fn stage_launcher_ready_with_key(
         &self,
         release: &ComponentRelease,
-        verifying_key: &VerifyingKey,
+        verifying_key: Option<&VerifyingKey>,
     ) -> Result<PathBuf, String> {
         validate_release_installable(release)?;
         if release.kind != ComponentKind::Launcher {
@@ -4781,7 +4819,7 @@ min_launcher = "1.0.0"
         let root = test_root("offline-runtime");
         let package = create_offline_runtime_package(&root, "0.2.0", "1.1.0");
         let key = test_signing_key().verifying_key();
-        let release = inspect_offline_package_with_key(&package, "1.1.0", &key)
+        let release = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
             .expect("inspect offline runtime");
         assert_eq!(release.id, "runtime.cot");
         assert_eq!(release.version, "0.2.0");
@@ -4801,13 +4839,76 @@ min_launcher = "1.0.0"
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Rewrites a ZIP without the entries whose names end with `suffix`.
+    fn strip_zip_entries(path: &Path, suffix: &str) {
+        let bytes = fs::read(path).expect("read package");
+        let mut source = ZipArchive::new(Cursor::new(bytes)).expect("open package");
+        let mut writer = ZipWriter::new(File::create(path).expect("rewrite package"));
+        for index in 0..source.len() {
+            let entry = source.by_index_raw(index).expect("package entry");
+            if !entry.name().ends_with(suffix) {
+                writer.raw_copy_file(entry).expect("copy package entry");
+            }
+        }
+        writer.finish().expect("finish package");
+    }
+
+    #[test]
+    fn unsigned_release_mode_accepts_packages_without_signatures() {
+        let root = test_root("offline-runtime-unsigned");
+        let package = create_offline_runtime_package(&root, "0.2.0", "1.1.0");
+        strip_zip_entries(&package, OFFLINE_PACKAGE_SIGNATURE);
+
+        let key = test_signing_key().verifying_key();
+        let error = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
+            .expect_err("signed mode requires a signature");
+        assert!(error.contains(OFFLINE_PACKAGE_SIGNATURE));
+
+        let release = inspect_offline_package_with_key(&package, "1.1.0", None)
+            .expect("unsigned mode relies on the manifest hashes");
+        assert_eq!(release.id, "runtime.cot");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsigned_release_mode_still_checks_package_contents() {
+        let root = test_root("offline-runtime-unsigned-altered");
+        let package = create_offline_runtime_package_with_runtime(
+            &root,
+            "0.2.0",
+            "1.1.0",
+            b"altered-runtime",
+            b"runtime",
+        );
+        strip_zip_entries(&package, OFFLINE_PACKAGE_SIGNATURE);
+        assert!(inspect_offline_package_with_key(&package, "1.1.0", None).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsigned_launcher_executable_needs_a_recorded_version_and_platform_binary() {
+        let root = test_root("launcher-exe-unsigned");
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("launcher");
+        fs::write(&path, launcher_binary(b"launcher")).expect("unsigned launcher");
+        assert_eq!(
+            verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), None)
+                .expect("unsigned launcher"),
+            "1.2.0"
+        );
+        assert!(verify_signed_launcher_executable_with_key(&path, None, None).is_err());
+        fs::write(&path, b"not-an-executable").expect("invalid launcher");
+        assert!(verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), None).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn localization_pack_can_contain_signed_language_components() {
         let root = test_root("offline-localization-pack");
         let package = create_offline_localization_pack(&root);
         let key = test_signing_key().verifying_key();
         let staging = root.join("staging");
-        let pack = extract_offline_localization_pack_with_key(&package, &staging, &key)
+        let pack = extract_offline_localization_pack_with_key(&package, &staging, Some(&key))
             .expect("inspect localization pack");
         assert_eq!(pack.game_id, "cot");
         assert_eq!(pack.version, "1.0.0");
@@ -4818,7 +4919,7 @@ min_launcher = "1.0.0"
         assert_eq!(language.display_name, "Brazilian Portuguese");
         assert_eq!(language.xbox_language, 1);
         assert_eq!(language.translation_version.as_deref(), Some("5.0"));
-        let release = inspect_offline_package_with_key(&language.package_path, "1.1.0", &key)
+        let release = inspect_offline_package_with_key(&language.package_path, "1.1.0", Some(&key))
             .expect("inspect nested language");
         assert_eq!(release.id, language.id);
         assert_eq!(release.locale.as_deref(), Some("pt-BR"));
@@ -4848,7 +4949,7 @@ min_launcher = "1.0.0"
             &language.package_path,
             "1.1.0",
             &catalog_release,
-            &key,
+            Some(&key),
         )
         .expect("verify nested language against pack-backed catalog release");
         assert_eq!(verified.id, "language.cot.pt-br");
@@ -4869,7 +4970,7 @@ min_launcher = "1.0.0"
         let root = test_root("offline-runtime-mom");
         let package = create_offline_mom_runtime_package(&root, "0.1.0");
         let key = test_signing_key().verifying_key();
-        let release = inspect_offline_package_with_key(&package, "1.1.0", &key)
+        let release = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
             .expect("inspect signed MOM runtime");
         assert_eq!(release.id, "runtime.mom");
         assert_eq!(release.game_id.as_deref(), Some("mom"));
@@ -4884,7 +4985,7 @@ min_launcher = "1.0.0"
         let root = test_root("offline-runtime-compat");
         let package = create_offline_runtime_package(&root, "0.2.0", "9.0.0");
         let key = test_signing_key().verifying_key();
-        let error = inspect_offline_package_with_key(&package, "1.1.0", &key)
+        let error = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
             .expect_err("incompatible package");
         assert!(error.contains("requires MojoRecomp Launcher 9.0.0 or newer"));
         let _ = fs::remove_dir_all(root);
@@ -4902,7 +5003,7 @@ min_launcher = "1.0.0"
         let root = test_root("offline-unofficial-signature");
         let package = create_offline_runtime_package(&root, "0.2.0", "1.1.0");
         let untrusted_key = SigningKey::from_bytes(&[0x33u8; 32]).verifying_key();
-        let error = inspect_offline_package_with_key(&package, "1.1.0", &untrusted_key)
+        let error = inspect_offline_package_with_key(&package, "1.1.0", Some(&untrusted_key))
             .expect_err("package signed by another key must be rejected");
         assert!(error.contains("signature is invalid"));
         let _ = fs::remove_dir_all(root);
@@ -4919,7 +5020,7 @@ min_launcher = "1.0.0"
             b"official-runtime",
         );
         let key = test_signing_key().verifying_key();
-        let error = inspect_offline_package_with_key(&package, "1.1.0", &key)
+        let error = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
             .expect_err("modified payload must be rejected");
         assert!(error.contains("signed integrity verification"));
         let _ = fs::remove_dir_all(root);
@@ -4930,9 +5031,9 @@ min_launcher = "1.0.0"
         let root = test_root("online-signed-catalog-match");
         let package = create_offline_runtime_package(&root, "0.2.0", "1.1.0");
         let key = test_signing_key().verifying_key();
-        let expected = inspect_offline_package_with_key(&package, "1.1.0", &key)
+        let expected = inspect_offline_package_with_key(&package, "1.1.0", Some(&key))
             .expect("signed runtime package");
-        inspect_signed_release_artifact_with_key(&package, "1.1.0", &expected, &key)
+        inspect_signed_release_artifact_with_key(&package, "1.1.0", &expected, Some(&key))
             .expect("matching catalog metadata");
 
         let mut altered = expected.clone();
@@ -4944,7 +5045,7 @@ min_launcher = "1.0.0"
                 min_version: Some("0.4.0".into()),
                 max_version: Some("0.4.0".into()),
             });
-        let error = inspect_signed_release_artifact_with_key(&package, "1.1.0", &altered, &key)
+        let error = inspect_signed_release_artifact_with_key(&package, "1.1.0", &altered, Some(&key))
             .expect_err("catalog compatibility must not override signed metadata");
         assert!(error.contains("does not match the update catalog"));
         let _ = fs::remove_dir_all(root);
@@ -5102,9 +5203,9 @@ min_launcher = "1.0.0"
     #[test]
     fn public_https_validation_accepts_official_repository_links() {
         for url in [
-            "https://github.com/OAleex/MojoRecomp",
-            "https://github.com/OAleex/MojoRecomp/issues/new?title=%5BLauncher%5D%20",
-            "https://github.com/OAleex/MojoRecomp/issues/new?title=%5BGame%5D%20",
+            "https://github.com/vinicgobbi/MojoRecomp",
+            "https://github.com/vinicgobbi/MojoRecomp/issues/new?title=%5BLauncher%5D%20",
+            "https://github.com/vinicgobbi/MojoRecomp/issues/new?title=%5BGame%5D%20",
         ] {
             let parsed = validate_public_https_url(url).expect("official repository URL");
             assert_eq!(parsed.scheme(), "https");
@@ -5942,12 +6043,12 @@ min_launcher = "1.0.0"
         let release = create_launcher_package(&store, "1.1.0");
         let key = test_signing_key().verifying_key();
         let ready = store
-            .stage_launcher_ready_with_key(&release, &key)
+            .stage_launcher_ready_with_key(&release, Some(&key))
             .expect("stage launcher executable");
         assert!(ready.join("ready.toml").is_file());
         assert!(ready.join(platform::LAUNCHER_ARTIFACT_NAME).is_file());
         let prepared = store
-            .prepare_launcher_replacement_with_key(&key)
+            .prepare_launcher_replacement_with_key(Some(&key))
             .expect("prepare signed launcher executable");
         assert_eq!(prepared.version, "1.1.0");
         assert!(
@@ -5975,12 +6076,12 @@ min_launcher = "1.0.0"
         write_signed_launcher_executable(&path, "1.2.0", &launcher_binary(b"launcher"), &signing_key);
 
         assert_eq!(
-            verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), &verifying_key)
+            verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), Some(&verifying_key))
                 .expect("valid signed launcher"),
             "1.2.0"
         );
         let wrong_version =
-            verify_signed_launcher_executable_with_key(&path, Some("1.3.0"), &verifying_key)
+            verify_signed_launcher_executable_with_key(&path, Some("1.3.0"), Some(&verifying_key))
                 .expect_err("signed version must be bound");
         assert!(wrong_version.contains("does not match expected version"));
 
@@ -5988,7 +6089,7 @@ min_launcher = "1.0.0"
         tampered[platform::LAUNCHER_EXECUTABLE_MAGIC.len()] ^= 0x01;
         fs::write(&path, tampered).expect("tampered launcher");
         let tampered_error =
-            verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), &verifying_key)
+            verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), Some(&verifying_key))
                 .expect_err("tampered launcher must fail");
         assert!(tampered_error.contains("signature is invalid"));
         fs::remove_dir_all(root).unwrap();

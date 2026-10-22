@@ -395,9 +395,7 @@ fn run_launcher_update_helper_from_args() -> Option<i32> {
             .and_then(|value| value.to_str())
             .ok_or_else(|| "Launcher update target has no file name".to_string())?;
         wait_for_process_exit(pid, 60_000)?;
-        let version = updates::signed_launcher_executable_version(
-            &source_root.join(platform::LAUNCHER_ARTIFACT_NAME),
-        )?;
+        let version = updates::prepared_launcher_version(&source_root)?;
         let backup_root = std::env::temp_dir().join(format!(
             "mojorecomp-launcher-backup-{}-{}",
             std::process::id(),
