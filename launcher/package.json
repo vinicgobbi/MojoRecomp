@@ -17,8 +17,8 @@
     "validate:signed-release": "node scripts/verify-signed-release.mjs",
     "validate:production": "node scripts/validate-release.mjs",
     "test:release-metadata": "node --test scripts/release-metadata.test.mjs",
-    "build:portable": "npm.cmd run build:production",
-    "build:production": "node scripts/build-tauri-release.mjs && npm.cmd run package:production && npm.cmd run validate:production",
+    "build:portable": "npm run build:production",
+    "build:production": "node scripts/build-tauri-release.mjs && npm run package:production && npm run validate:production",
     "test:launcher-ui": "node --test scripts/launcher-ui-contract.test.mjs",
     "check": "tsc --noEmit && npm run test:launcher-ui",
     "tauri": "tauri"

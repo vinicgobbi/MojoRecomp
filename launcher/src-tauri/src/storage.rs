@@ -87,11 +87,11 @@ impl StorageLayout {
 
     pub fn discover(executable_root: PathBuf) -> Result<Self, String> {
         let local_base = platform_local_app_data()
-            .ok_or_else(|| "The Windows Local AppData folder is unavailable".to_string())?;
+            .ok_or_else(|| "The local application data folder is unavailable".to_string())?;
         let saved_games_base = platform_saved_games()
-            .ok_or_else(|| "The Windows Saved Games folder is unavailable".to_string())?;
+            .ok_or_else(|| "The saved games folder is unavailable".to_string())?;
         let profile = platform_user_profile()
-            .ok_or_else(|| "The Windows user profile folder is unavailable".to_string())?;
+            .ok_or_else(|| "The user profile folder is unavailable".to_string())?;
         Ok(Self::new(
             local_base.join("MojoRecomp"),
             saved_games_base.join("MojoRecomp"),
@@ -408,6 +408,9 @@ pub fn normalize_library_path(path: &Path) -> Result<PathBuf, String> {
                 ) {
                     return Err("The game library must use a local Windows drive".into());
                 }
+                // Path prefixes only exist on Windows.
+                #[cfg(not(windows))]
+                let _ = prefix;
                 normalized.push(component.as_os_str());
             }
             Component::RootDir | Component::Normal(_) => {
@@ -817,6 +820,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(windows)]
     #[test]
     fn layout_separates_library_machine_data_and_saved_games() {
         let layout = StorageLayout::new(
@@ -845,6 +849,38 @@ mod tests {
         assert_eq!(
             layout.legacy_portable_root(),
             PathBuf::from(r"D:\Apps\MojoRecomp\userdata")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn layout_separates_library_machine_data_and_saved_games() {
+        let layout = StorageLayout::new(
+            PathBuf::from("/home/test/.local/share/MojoRecomp"),
+            PathBuf::from("/home/test/.local/share/games/MojoRecomp"),
+            PathBuf::from("/home/test/Applications"),
+            PathBuf::from("/home/test/Games/MojoRecomp-Games"),
+        );
+
+        assert_eq!(
+            layout.settings_path("cot"),
+            PathBuf::from("/home/test/.local/share/MojoRecomp/titles/cot/settings.toml")
+        );
+        assert_eq!(
+            layout.save_root("cot"),
+            PathBuf::from("/home/test/.local/share/games/MojoRecomp/cot")
+        );
+        assert_eq!(
+            layout.cache_root("cot"),
+            PathBuf::from("/home/test/.local/share/MojoRecomp/cache/cot")
+        );
+        assert_eq!(
+            layout.default_library_root(),
+            PathBuf::from("/home/test/Games/MojoRecomp-Games")
+        );
+        assert_eq!(
+            layout.legacy_portable_root(),
+            PathBuf::from("/home/test/Applications/userdata")
         );
     }
 
@@ -1238,6 +1274,53 @@ game_library = "C:\\Games\\MojoRecomp-Games"
         fs::remove_dir_all(root).expect("test cleanup");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn normalized_paths_reject_roots_aliases_and_storage_overlap() {
+        assert!(normalize_library_path(Path::new("/.")).is_err());
+        assert!(normalize_library_path(Path::new("/games/../..")).is_err());
+        assert!(normalize_library_path(Path::new("games/MojoRecomp-Games")).is_err());
+        assert_eq!(
+            normalize_library_path(Path::new("/games/./mojo/../MojoRecomp-Games"))
+                .expect("normalized path"),
+            PathBuf::from("/games/MojoRecomp-Games")
+        );
+        assert!(
+            paths_overlap(
+                Path::new("/home/test/.local/share/games/MojoRecomp/library"),
+                Path::new("/home/test/.local/share/games/MojoRecomp")
+            )
+            .expect("overlap check")
+        );
+        // Linux file systems are case-sensitive, so differently cased paths
+        // are distinct folders.
+        assert!(
+            !paths_overlap(
+                Path::new("/home/test/Games/MojoRecomp"),
+                Path::new("/home/test/games/mojorecomp")
+            )
+            .expect("case-sensitive overlap check")
+        );
+
+        let layout = StorageLayout::new(
+            PathBuf::from("/home/test/.local/share/MojoRecomp"),
+            PathBuf::from("/home/test/.local/share/games/MojoRecomp"),
+            PathBuf::from("/home/test/Applications"),
+            PathBuf::from("/home/test/Games/MojoRecomp-Games"),
+        );
+        assert!(
+            layout
+                .normalize_game_library(Path::new("/home/test/.local/share/MojoRecomp/games"))
+                .is_err()
+        );
+        assert!(
+            layout
+                .normalize_game_library(Path::new("/home/test/.local/share/games"))
+                .is_err()
+        );
+    }
+
+    #[cfg(windows)]
     #[test]
     fn normalized_paths_reject_roots_aliases_and_storage_overlap() {
         assert!(normalize_library_path(Path::new(r"C:\.")).is_err());

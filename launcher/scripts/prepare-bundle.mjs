@@ -17,6 +17,13 @@ const libraryDestination = resolve(launcherRoot, "bundle/lib");
 const toolDestination = resolve(launcherRoot, "bundle/tools");
 const extractXisoSource = resolve(projectRoot, "thirdparty/build/extract-xiso/extract-xiso.exe");
 
+// Only Windows launcher builds embed the transitional COT runtime bootstrap.
+// Linux launchers always install the signed runtime component instead.
+if (process.platform !== "win32") {
+  console.log("Skipping embedded runtime bootstrap: not used by this launcher platform");
+  process.exit(0);
+}
+
 async function requireFile(path, label) {
   const info = await stat(path).catch(() => null);
   if (!info?.isFile()) {

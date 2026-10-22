@@ -1981,6 +1981,7 @@ dependencies = [
  "discord-rich-presence",
  "ed25519-dalek",
  "fs2",
+ "libc",
  "reqwest",
  "rustls",
  "semver",

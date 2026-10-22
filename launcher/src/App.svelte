@@ -1827,7 +1827,7 @@
               {:else if libraryProbeMatchesPath && libraryPathStatus && !libraryPathStatus.enough_space}
                 <p class="library-space-warning">Not enough free space. Choose a location with at least {formatBytes(libraryPathStatus.required_free_bytes)} available.</p>
               {:else}
-                <p class="library-storage-note">Saves remain separate in the Windows Saved Games folder.</p>
+                <p class="library-storage-note">Saves remain stored separately from the game library.</p>
               {/if}
               {#if libraryProgress}
                 <div class:failed={libraryProgress.stage === "failed"} class="library-progress" aria-live="polite">

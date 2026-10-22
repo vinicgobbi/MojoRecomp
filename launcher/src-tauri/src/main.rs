@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod localization;
+mod platform;
 mod presence;
 mod rcf;
 mod storage;
@@ -51,34 +52,36 @@ const RUNTIME_HISTORY_MANIFEST: &str = include_str!("../../resources/runtime-his
 const DISK_MINIMUM_MARGIN_BYTES: u64 = 1024 * 1024 * 1024;
 const OBS_VULKAN_CAPTURE_DISABLE_ENV: &str = "DISABLE_VULKAN_OBS_CAPTURE";
 include!(concat!(env!("OUT_DIR"), "/third_party_licenses.rs"));
-// Production builds embed the verified runtime/tool payload prepared by
-// scripts/prepare-bundle.mjs. Unit tests exercise launcher logic only and must
-// remain runnable from a clean source tree before packaging output exists.
-#[cfg(not(test))]
+// Windows production builds embed the verified runtime/tool payload prepared
+// by scripts/prepare-bundle.mjs. Unit tests exercise launcher logic only and
+// must remain runnable from a clean source tree before packaging output exists.
+// Linux builds have no transitional bootstrap and always require the signed
+// runtime component.
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_COT_RUNTIME: &[u8] =
     include_bytes!("../binaries/cot-runtime-x86_64-pc-windows-msvc.exe");
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_DXCOMPILER: &[u8] = include_bytes!("../../bundle/lib/dxcompiler.dll");
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_DXIL: &[u8] = include_bytes!("../../bundle/lib/dxil.dll");
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_FFMPEG: &[u8] = include_bytes!("../../bundle/lib/mojorecomp-ffmpeg.dll");
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_LZX: &[u8] = include_bytes!("../../bundle/lib/mojorecomp-lzx.dll");
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 const EMBEDDED_EXTRACT_XISO: &[u8] = include_bytes!("../../bundle/tools/extract-xiso.exe");
 
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_COT_RUNTIME: &[u8] = &[];
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_DXCOMPILER: &[u8] = &[];
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_DXIL: &[u8] = &[];
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_FFMPEG: &[u8] = &[];
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_LZX: &[u8] = &[];
-#[cfg(test)]
+#[cfg(any(test, not(windows)))]
 const EMBEDDED_EXTRACT_XISO: &[u8] = &[];
 
 #[cfg(windows)]
@@ -93,6 +96,8 @@ fn hide_child_console(command: &mut Command) {
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    #[cfg(not(windows))]
+    let _ = command;
 }
 
 fn apply_runtime_compatibility_environment(command: &mut Command) {
@@ -141,6 +146,8 @@ impl RuntimeJob {
         }
     }
 
+    fn prepare(&self, _command: &mut Command) {}
+
     fn assign(&self, child: &Child) -> Result<(), String> {
         unsafe {
             let process = child.as_raw_handle() as HANDLE;
@@ -167,14 +174,35 @@ impl Drop for RuntimeJob {
     }
 }
 
-#[cfg(not(windows))]
+// Linux has no Job Object. The runtime asks the kernel to kill it when the
+// launching thread exits. launch_game is a synchronous Tauri command, which
+// runs on the main thread, so the signal fires when the launcher itself exits.
+#[cfg(target_os = "linux")]
 struct RuntimeJob;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 impl RuntimeJob {
     fn new() -> Result<Self, String> {
         Ok(Self)
     }
+
+    fn prepare(&self, command: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        let launcher_pid = std::process::id();
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The launcher may have exited before prctl took effect.
+                if libc::getppid() as u32 != launcher_pid {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
+    }
+
     fn assign(&self, _child: &Child) -> Result<(), String> {
         Ok(())
     }
@@ -320,8 +348,15 @@ fn wait_for_process_exit(pid: u32, timeout_ms: u32) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
-fn wait_for_process_exit(_pid: u32, _timeout_ms: u32) -> Result<(), String> {
+#[cfg(target_os = "linux")]
+fn wait_for_process_exit(pid: u32, timeout_ms: u32) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.into());
+    while platform::process_is_running(pid) {
+        if std::time::Instant::now() >= deadline {
+            return Err("Timed out waiting for the previous launcher process to exit".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
     Ok(())
 }
 
@@ -338,12 +373,24 @@ fn wait_for_runtime_process_exit(pid: u32) -> bool {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn wait_for_runtime_process_exit(pid: u32) -> bool {
+    while platform::process_is_running(pid) {
+        thread::sleep(Duration::from_millis(500));
+    }
+    true
+}
+
 fn restore_and_restart_previous_launcher(
     target_exe: &Path,
     target_root: &Path,
     backup_root: &Path,
 ) -> Result<(), String> {
-    updates::restore_launcher_replacement_tree(target_root, backup_root)?;
+    let target_name = target_exe
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Launcher update target has no file name".to_string())?;
+    updates::restore_launcher_replacement_tree(target_root, target_name, backup_root)?;
     let _ = fs::remove_dir_all(backup_root);
     Command::new(target_exe)
         .spawn()
@@ -375,17 +422,23 @@ fn run_launcher_update_helper_from_args() -> Option<i32> {
         let target_root = target_exe
             .parent()
             .ok_or_else(|| "Launcher update target has no parent directory".to_string())?;
+        let target_name = target_exe
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "Launcher update target has no file name".to_string())?;
         wait_for_process_exit(pid, 60_000)?;
         let version = updates::signed_launcher_executable_version(
-            &source_root.join("mojorecomp-launcher.exe"),
+            &source_root.join(platform::LAUNCHER_ARTIFACT_NAME),
         )?;
         let backup_root = std::env::temp_dir().join(format!(
             "mojorecomp-launcher-backup-{}-{}",
             std::process::id(),
             timestamp_seconds()
         ));
-        updates::backup_launcher_replacement_tree(target_root, &backup_root)?;
-        if let Err(error) = updates::apply_launcher_replacement_tree(&source_root, target_root) {
+        updates::backup_launcher_replacement_tree(target_root, target_name, &backup_root)?;
+        if let Err(error) =
+            updates::apply_launcher_replacement_tree(&source_root, target_root, target_name)
+        {
             record_launcher_update_action(
                 "apply_failed",
                 &format!("Launcher update {version} could not be applied: {error}"),
@@ -461,7 +514,7 @@ fn run_launcher_update_helper_from_args() -> Option<i32> {
 }
 
 fn cleanup_launcher_update_helpers() {
-    let Ok(current_exe) = std::env::current_exe() else {
+    let Ok(current_exe) = platform::launcher_executable_path() else {
         return;
     };
     let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
@@ -473,7 +526,8 @@ fn cleanup_launcher_update_helpers() {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| {
-                name.starts_with("mojorecomp-launcher-update-") && name.ends_with(".exe")
+                name.starts_with("mojorecomp-launcher-update-")
+                    && name.ends_with(platform::LAUNCHER_HELPER_EXTENSION)
             });
         if is_helper && path != current_exe {
             let _ = fs::remove_file(path);
@@ -1094,8 +1148,7 @@ fn migrate_legacy_diagnostics() {
 }
 
 fn executable_root() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Could not resolve launcher executable: {e}"))?;
+    let exe = platform::launcher_executable_path()?;
     exe.parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "Launcher executable has no parent directory".to_string())
@@ -1170,6 +1223,10 @@ fn migrate_legacy_game_components() -> Result<LegacyComponentMigration, String> 
 }
 
 fn migrate_legacy_embedded_runtime_cache(runtime_version: &str) -> Result<bool, String> {
+    // The legacy cache only ever held the Windows embedded bootstrap payload.
+    if !embedded_cot_bootstrap_available() {
+        return Ok(false);
+    }
     let store = game_component_store()?;
     if runtime_component_is_ready(&store, "runtime.cot")? {
         return Ok(false);
@@ -1420,7 +1477,7 @@ fn extract_xiso_path() -> Result<PathBuf, String> {
     match prepared_cot_runtime_component() {
         Ok(Some(runtime)) => {
             if let Some(root) = runtime.parent() {
-                let tool = root.join("extract-xiso.exe");
+                let tool = root.join(platform::EXTRACT_XISO_EXECUTABLE);
                 if tool.is_file() {
                     return Ok(tool);
                 }
@@ -1470,7 +1527,7 @@ fn parse_iso_listing(text: &str) -> (u64, u64) {
         let Ok(size) = size_text.parse::<u64>() else {
             continue;
         };
-        if !path.ends_with('\\') {
+        if !path.ends_with(['\\', '/']) {
             files += 1;
             bytes = bytes.saturating_add(size);
         }
@@ -1663,13 +1720,44 @@ fn sanitize_text(mut text: String, game_root: Option<&Path>) -> String {
             "<SAVED_GAMES>",
         );
     }
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
+    if let Some(profile) = std::env::var_os(platform::USER_PROFILE_ENV) {
         text = text.replace(
             &PathBuf::from(profile).to_string_lossy().to_string(),
             "<USER_PROFILE>",
         );
     }
     text
+}
+
+#[cfg(windows)]
+fn host_os_version() -> String {
+    let mut command = Command::new("cmd.exe");
+    command.args(["/C", "ver"]);
+    hide_child_console(&mut command);
+    command
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Windows version unavailable".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn host_os_version() -> String {
+    let distribution = fs::read_to_string("/etc/os-release").ok().and_then(|text| {
+        text.lines()
+            .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+            .map(|value| value.trim_matches('"').to_string())
+    });
+    let kernel = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|value| value.trim().to_string());
+    match (distribution, kernel) {
+        (Some(distribution), Some(kernel)) => format!("{distribution} (Linux {kernel})"),
+        (Some(distribution), None) => distribution,
+        (None, Some(kernel)) => format!("Linux {kernel}"),
+        (None, None) => "Linux version unavailable".to_string(),
+    }
 }
 
 fn add_text_to_zip(zip: &mut ZipWriter<File>, name: &str, text: &str) -> Result<(), String> {
@@ -2304,9 +2392,7 @@ async fn set_game_library(
 fn open_game_library() -> Result<(), String> {
     let path = managed_games_root()?;
     initialize_library(&path)?;
-    Command::new("explorer.exe")
-        .arg(path)
-        .spawn()
+    platform::open_with_desktop(path.as_os_str())
         .map_err(|error| format!("Could not open game library: {error}"))?;
     Ok(())
 }
@@ -3246,7 +3332,7 @@ fn launch_game(
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "Embedded runtime path has no parent directory".to_string())?;
-    let dxc = runtime_payload_dir.join("dxcompiler.dll");
+    let dxc = runtime_payload_dir.join(platform::DXCOMPILER_LIBRARY);
     let mut command = Command::new(&runtime);
     apply_runtime_compatibility_environment(&mut command);
     command
@@ -3374,6 +3460,7 @@ fn launch_game(
     if let Some(parent) = runtime.parent() {
         command.current_dir(parent);
     }
+    state.runtime_job.prepare(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("Could not launch {}: {error}", game.name))?;
@@ -3389,7 +3476,6 @@ fn launch_game(
         state.presence.cot_started(pid);
     }
     processes.insert(game_id, child);
-    #[cfg(windows)]
     if is_cot {
         thread::spawn(move || {
             if wait_for_runtime_process_exit(pid) {
@@ -3486,15 +3572,7 @@ fn create_support_package(
     let hardware_result = run_hardware_probe(&game);
     let hardware_value = hardware_result.as_ref().ok();
 
-    let mut os_version_command = Command::new("cmd.exe");
-    os_version_command.args(["/C", "ver"]);
-    hide_child_console(&mut os_version_command);
-    let os_version = os_version_command
-        .output()
-        .ok()
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Windows version unavailable".to_string());
+    let os_version = host_os_version();
 
     let runtime_file = runtime_path(&game).ok();
     let runtime_sha256 = runtime_file
@@ -3757,7 +3835,7 @@ fn create_support_package(
         game_id, dump_included
     ));
     if let Some(parent) = output_path.parent() {
-        let _ = Command::new("explorer.exe").arg(parent).spawn();
+        let _ = platform::open_with_desktop(parent.as_os_str());
     }
     Ok(output_path.to_string_lossy().to_string())
 }
@@ -3777,9 +3855,7 @@ fn open_title_folder(
         _ => title_root(&game_id)?,
     };
     fs::create_dir_all(&path).map_err(|e| format!("Could not create folder: {e}"))?;
-    Command::new("explorer.exe")
-        .arg(path)
-        .spawn()
+    platform::open_with_desktop(path.as_os_str())
         .map_err(|e| format!("Could not open folder: {e}"))?;
     Ok(())
 }
@@ -3788,9 +3864,7 @@ fn open_title_folder(
 fn open_license_notices() -> Result<(), String> {
     let root = storage_layout()?.licenses_root();
     materialize_license_notices(&root)?;
-    Command::new("explorer.exe")
-        .arg(root)
-        .spawn()
+    platform::open_with_desktop(root.as_os_str())
         .map_err(|e| format!("Could not open licenses and notices: {e}"))?;
     Ok(())
 }
@@ -5690,22 +5764,19 @@ fn apply_launcher_update(
 
     let prepared = launcher_component_store()?.prepare_launcher_replacement()?;
     game_component_store()?.ensure_launcher_version_compatible(&prepared.version)?;
-    let current_exe = std::env::current_exe()
-        .map_err(|error| format!("Could not resolve current launcher executable: {error}"))?;
-    if !current_exe
-        .file_name()
-        .and_then(|value| value.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("mojorecomp-launcher.exe"))
-    {
+    let current_exe = platform::launcher_executable_path()?;
+    if !platform::launcher_supports_self_update(&current_exe) {
         return Err("Launcher self-update is only available from a packaged portable build".into());
     }
     let helper = std::env::temp_dir().join(format!(
-        "mojorecomp-launcher-update-{}-{}.exe",
+        "mojorecomp-launcher-update-{}-{}{}",
         std::process::id(),
-        timestamp_seconds()
+        timestamp_seconds(),
+        platform::LAUNCHER_HELPER_EXTENSION
     ));
     fs::copy(&current_exe, &helper)
         .map_err(|error| format!("Could not prepare launcher update helper: {error}"))?;
+    platform::make_executable(&helper)?;
     Command::new(&helper)
         .arg("--apply-launcher-update")
         .arg(std::process::id().to_string())
@@ -5759,9 +5830,7 @@ fn rollback_component_update(
 #[tauri::command]
 fn open_update_url(url: String) -> Result<(), String> {
     let url = updates::validate_resolved_public_https_url(&url)?;
-    Command::new("explorer.exe")
-        .arg(url.as_str())
-        .spawn()
+    platform::open_with_desktop(std::ffi::OsStr::new(url.as_str()))
         .map_err(|e| format!("Could not open the update page: {e}"))?;
     Ok(())
 }
@@ -6017,7 +6086,7 @@ mod tests {
             "game={} app={} user={}",
             game_root.display(),
             app_root().expect("app root").display(),
-            std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Unknown".into())
+            std::env::var(platform::USER_PROFILE_ENV).expect("user profile environment")
         );
         sample = sanitize_text(sample, Some(&game_root));
         assert!(sample.contains("<GAME_ROOT>"));
@@ -6509,6 +6578,66 @@ texture_filtering = "default"
         assert_eq!(status.exit_code, Some(0));
         assert!(status.pid.is_none());
         assert!(processes.lock().unwrap().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_exit_detection_reports_clean_exit_and_removes_child() {
+        let processes = Mutex::new(HashMap::<String, Child>::new());
+        let child = Command::new("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn clean-exit child");
+        processes.lock().unwrap().insert("cot".into(), child);
+
+        let mut observed = None;
+        for _ in 0..100 {
+            let status = inspect_process_status("cot", &processes).expect("inspect process status");
+            if !status.running {
+                observed = Some(status);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let status = observed.expect("child exit was detected");
+        assert_eq!(status.exit_code, Some(0));
+        assert!(status.pid.is_none());
+        assert!(processes.lock().unwrap().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exited_child_is_not_reported_as_running_before_it_is_reaped() {
+        let mut child = Command::new("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = child.id();
+        // The exited child stays a zombie until wait(); it must already count
+        // as stopped so presence and update waits do not hang.
+        wait_for_process_exit(pid, 5_000).expect("zombie child counts as exited");
+        assert!(wait_for_runtime_process_exit(pid));
+        child.wait().expect("reap child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_job_prepared_command_still_spawns() {
+        let job = RuntimeJob::new().expect("create runtime job");
+        let mut command = Command::new("true");
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        job.prepare(&mut command);
+        let mut child = command.spawn().expect("spawn child with parent-death signal");
+        job.assign(&child).expect("assign child");
+        assert!(child.wait().expect("child status").success());
     }
 
     #[cfg(windows)]

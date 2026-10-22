@@ -1,3 +1,4 @@
+use crate::platform;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -24,15 +25,7 @@ const LAUNCHER_EXE_SIGNATURE_MAGIC: &[u8] = b"MOJORECOMP-LAUNCHER-SIG-V1";
 const LAUNCHER_EXE_SIGNATURE_DOMAIN: &[u8] = b"MojoRecomp launcher executable signature v1\0";
 const RELEASE_SIGNING_PUBLIC_KEY_HEX: &str = include_str!("../../release-signing-public-key.hex");
 const UPDATE_DISK_MARGIN_BYTES: u64 = 128 * 1024 * 1024;
-pub const COT_RUNTIME_ENTRYPOINT: &str = "cot-runtime.exe";
-pub const COT_RUNTIME_REQUIRED_FILES: [&str; 6] = [
-    COT_RUNTIME_ENTRYPOINT,
-    "dxcompiler.dll",
-    "dxil.dll",
-    "mojorecomp-ffmpeg.dll",
-    "mojorecomp-lzx.dll",
-    "extract-xiso.exe",
-];
+pub use crate::platform::{COT_RUNTIME_ENTRYPOINT, COT_RUNTIME_REQUIRED_FILES};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -521,14 +514,27 @@ fn validate_release(release: &ComponentRelease) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a release or signed package may be installed on this host.
+fn targets_host(kind: &ComponentKind, target_platform: &str, target_arch: &str) -> bool {
+    if target_arch != platform::HOST_ARCH {
+        return false;
+    }
+    // Language packs carry game data only. They keep the original "windows"
+    // tag so that one signed package serves every launcher platform.
+    target_platform == platform::HOST_PLATFORM
+        || (*kind == ComponentKind::Language && target_platform == "windows")
+}
+
 fn validate_release_installable(release: &ComponentRelease) -> Result<(), String> {
     validate_component_id(&release.id)?;
     Version::parse(&release.version)
         .map_err(|_| format!("Component {} has an invalid semantic version", release.id))?;
-    if release.platform != "windows" || release.arch != "x86_64" {
+    if !targets_host(&release.kind, &release.platform, &release.arch) {
         return Err(format!(
-            "Component {} must target windows-x86_64",
-            release.id
+            "Component {} must target {}-{}",
+            release.id,
+            platform::HOST_PLATFORM,
+            platform::HOST_ARCH
         ));
     }
     if release.size == 0 {
@@ -582,7 +588,7 @@ fn validate_release_installable(release: &ComponentRelease) -> Result<(), String
                 .as_deref()
                 .ok_or_else(|| format!("Runtime {} is missing entrypoint", release.id))?;
             safe_relative_path(entrypoint)?;
-            if !entrypoint.to_ascii_lowercase().ends_with(".exe") {
+            if !platform::is_runtime_entrypoint_name(entrypoint) {
                 return Err(format!(
                     "Runtime {} entrypoint must be an executable",
                     release.id
@@ -808,8 +814,8 @@ fn verify_signed_launcher_executable_with_key(
     let bytes =
         fs::read(path).map_err(|error| format!("Could not read launcher executable: {error}"))?;
     let minimum = LAUNCHER_EXE_SIGNATURE_MAGIC.len() + 2 + 64 + 1;
-    if bytes.len() < minimum || !bytes.starts_with(b"MZ") {
-        return Err("Launcher update is not a valid signed Windows executable".into());
+    if bytes.len() < minimum || !bytes.starts_with(platform::LAUNCHER_EXECUTABLE_MAGIC) {
+        return Err("Launcher update is not a valid signed launcher executable for this platform".into());
     }
     let magic_start = bytes.len() - LAUNCHER_EXE_SIGNATURE_MAGIC.len();
     if &bytes[magic_start..] != LAUNCHER_EXE_SIGNATURE_MAGIC {
@@ -842,8 +848,8 @@ fn verify_signed_launcher_executable_with_key(
         ));
     }
     let payload = &bytes[..version_start];
-    if !payload.starts_with(b"MZ") {
-        return Err("Launcher executable payload is not a Windows executable".into());
+    if !payload.starts_with(platform::LAUNCHER_EXECUTABLE_MAGIC) {
+        return Err("Launcher executable payload is not an executable for this platform".into());
     }
     let payload_hash = Sha256::digest(payload);
     let mut hash_bytes = [0u8; 32];
@@ -913,9 +919,10 @@ fn expected_offline_package_root(manifest: &OfflinePackageManifest) -> Result<St
                 .ok_or_else(|| "Offline runtime package has an invalid component ID".to_string())?;
             validate_game_id(game)?;
             Ok(format!(
-                "MojoRecomp-{}-Runtime-{}-windows-x64",
+                "MojoRecomp-{}-Runtime-{}-{}",
                 game.to_ascii_uppercase(),
-                manifest.version
+                manifest.version,
+                platform::RELEASE_TARGET
             ))
         }
         ComponentKind::Language => {
@@ -1501,8 +1508,12 @@ fn inspect_offline_package_with_key(
     verifying_key: &VerifyingKey,
 ) -> Result<ComponentRelease, String> {
     let (manifest, unpacked_size) = inspect_offline_zip_manifest_with_key(path, verifying_key)?;
-    if manifest.platform != "windows" || manifest.arch != "x86_64" {
-        return Err("Offline update package must target windows-x86_64".into());
+    if !targets_host(&manifest.kind, &manifest.platform, &manifest.arch) {
+        return Err(format!(
+            "Offline update package must target {}-{}",
+            platform::HOST_PLATFORM,
+            platform::HOST_ARCH
+        ));
     }
     Version::parse(&manifest.version)
         .map_err(|_| "Offline update package has an invalid semantic version".to_string())?;
@@ -1545,7 +1556,7 @@ fn inspect_offline_package_with_key(
                 .as_deref()
                 .ok_or_else(|| "Offline runtime package is missing its entrypoint".to_string())?;
             if manifest.package != PackageFormat::Zip
-                || !entrypoint.to_ascii_lowercase().ends_with(".exe")
+                || !platform::is_runtime_entrypoint_name(entrypoint)
                 || !manifest
                     .required_files
                     .iter()
@@ -1922,10 +1933,14 @@ pub fn fetch_catalog(url: &str) -> Result<UpdateCatalog, String> {
             .json::<Vec<GitHubReleaseEntry>>()
             .map_err(|error| format!("Could not read GitHub release feed: {error}"))?;
         let asset_url =
-            newest_github_asset_url(&releases, "update-catalog.toml").ok_or_else(|| {
-                "No published GitHub release or pre-release contains update-catalog.toml"
-                    .to_string()
-            })?;
+            newest_github_asset_url(&releases, platform::UPDATE_CATALOG_ASSET).ok_or_else(
+                || {
+                    format!(
+                        "No published GitHub release or pre-release contains {}",
+                        platform::UPDATE_CATALOG_ASSET
+                    )
+                },
+            )?;
         validate_resolved_public_https_url(&asset_url)?;
         let asset_response = client
             .get(&asset_url)
@@ -2510,7 +2525,9 @@ impl ComponentStore {
         }
         fs::create_dir_all(&replacement)
             .map_err(|error| format!("Could not create launcher replacement staging: {error}"))?;
-        copy_file_atomic(&artifact, &replacement.join("mojorecomp-launcher.exe"))?;
+        let replacement_executable = replacement.join(platform::LAUNCHER_ARTIFACT_NAME);
+        copy_file_atomic(&artifact, &replacement_executable)?;
+        platform::make_executable(&replacement_executable)?;
         Ok(PreparedLauncherReplacement {
             version: ready.version,
             source_root: replacement,
@@ -2843,7 +2860,7 @@ impl ComponentStore {
         }
         fs::create_dir_all(&ready_root)
             .map_err(|error| format!("Could not create launcher update directory: {error}"))?;
-        let file_name = "mojorecomp-launcher.exe".to_string();
+        let file_name = platform::LAUNCHER_ARTIFACT_NAME.to_string();
         let destination = ready_root.join(&file_name);
         fs::rename(&artifact, &destination)
             .map_err(|error| format!("Could not preserve verified launcher update: {error}"))?;
@@ -2928,13 +2945,17 @@ impl ComponentStore {
                 .and_then(|value| value.to_str())
                 .unwrap_or("");
             let override_path = override_root.join(file_name);
-            if matches!(file_name, "mojorecomp-ffmpeg.dll" | "mojorecomp-lzx.dll")
+            if platform::REPLACEABLE_LGPL_LIBRARIES.contains(&file_name)
                 && override_path.is_file()
             {
                 copy_file_atomic(&override_path, &destination)?;
             } else {
                 copy_file_atomic(&source, &destination)?;
             }
+            // ZIP extraction does not preserve Unix mode bits. The run
+            // directory holds only the runtime payload: executables and the
+            // shared libraries they load.
+            platform::make_executable(&destination)?;
         }
         Ok(Some(run_root.join(entrypoint)))
     }
@@ -3954,25 +3975,52 @@ fn extract_verified_zip(
     Ok(installed)
 }
 
+/// Files replaced, backed up, or restored by a launcher self-update: the
+/// launcher executable itself plus the legacy companions of this platform.
+fn launcher_replacement_files(launcher_file_name: &str) -> Vec<&str> {
+    let mut names = vec![launcher_file_name];
+    names.extend_from_slice(legacy_launcher_companion_files());
+    names
+}
+
+fn legacy_launcher_companion_files() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &[
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.txt",
+            "README.txt",
+            OFFLINE_PACKAGE_MANIFEST,
+            OFFLINE_PACKAGE_SIGNATURE,
+        ]
+    }
+    // Linux AppImages live in arbitrary user folders, so files beside them
+    // never belong to the launcher and must not be touched.
+    #[cfg(not(windows))]
+    {
+        &[]
+    }
+}
+
 pub fn apply_launcher_replacement_tree(
     source_root: &Path,
     target_root: &Path,
+    launcher_file_name: &str,
 ) -> Result<(), String> {
     if !source_root.is_dir() || !target_root.is_dir() {
         return Err("Launcher replacement source or destination directory is unavailable".into());
     }
-    let source_exe = source_root.join("mojorecomp-launcher.exe");
+    let source_exe = source_root.join(platform::LAUNCHER_ARTIFACT_NAME);
     if !source_exe.is_file() {
-        return Err("Launcher replacement source has no mojorecomp-launcher.exe".into());
+        return Err(format!(
+            "Launcher replacement source has no {}",
+            platform::LAUNCHER_ARTIFACT_NAME
+        ));
     }
-    copy_file_atomic(&source_exe, &target_root.join("mojorecomp-launcher.exe"))?;
-    for name in [
-        "LICENSE",
-        "THIRD_PARTY_NOTICES.txt",
-        "README.txt",
-        OFFLINE_PACKAGE_MANIFEST,
-        OFFLINE_PACKAGE_SIGNATURE,
-    ] {
+    let target_exe = target_root.join(launcher_file_name);
+    copy_file_atomic(&source_exe, &target_exe)?;
+    platform::make_executable(&target_exe)?;
+    for name in legacy_launcher_companion_files() {
         let legacy = target_root.join(name);
         if legacy.exists() {
             fs::remove_file(&legacy).map_err(|error| {
@@ -3988,6 +4036,7 @@ pub fn apply_launcher_replacement_tree(
 
 pub fn backup_launcher_replacement_tree(
     target_root: &Path,
+    launcher_file_name: &str,
     backup_root: &Path,
 ) -> Result<(), String> {
     if !target_root.is_dir() || backup_root.exists() {
@@ -3995,14 +4044,7 @@ pub fn backup_launcher_replacement_tree(
     }
     fs::create_dir_all(backup_root)
         .map_err(|error| format!("Could not create launcher update backup: {error}"))?;
-    for name in [
-        "mojorecomp-launcher.exe",
-        "LICENSE",
-        "THIRD_PARTY_NOTICES.txt",
-        "README.txt",
-        OFFLINE_PACKAGE_MANIFEST,
-        OFFLINE_PACKAGE_SIGNATURE,
-    ] {
+    for name in launcher_replacement_files(launcher_file_name) {
         let source = target_root.join(name);
         match fs::symlink_metadata(&source) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
@@ -4033,23 +4075,20 @@ pub fn backup_launcher_replacement_tree(
 
 pub fn restore_launcher_replacement_tree(
     target_root: &Path,
+    launcher_file_name: &str,
     backup_root: &Path,
 ) -> Result<(), String> {
     if !target_root.is_dir() || !backup_root.is_dir() {
         return Err("Launcher replacement restore paths are invalid".into());
     }
-    for name in [
-        "mojorecomp-launcher.exe",
-        "LICENSE",
-        "THIRD_PARTY_NOTICES.txt",
-        "README.txt",
-        OFFLINE_PACKAGE_MANIFEST,
-        OFFLINE_PACKAGE_SIGNATURE,
-    ] {
+    for name in launcher_replacement_files(launcher_file_name) {
         let backup = backup_root.join(name);
         let target = target_root.join(name);
         if backup.is_file() {
             copy_file_atomic(&backup, &target)?;
+            if name == launcher_file_name {
+                platform::make_executable(&target)?;
+            }
         } else if target.exists() {
             fs::remove_file(&target).map_err(|error| {
                 format!(
@@ -4174,10 +4213,6 @@ fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
-    if destination.exists() {
-        fs::remove_file(destination)
-            .map_err(|error| format!("Could not replace {}: {error}", destination.display()))?;
-    }
     fs::rename(source, destination)
         .map_err(|error| format!("Could not replace {}: {error}", destination.display()))
 }
@@ -4189,6 +4224,44 @@ mod tests {
     use std::io::Cursor;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    // Platform-specific payload names shared by the fixtures below.
+    const EXTRACT_XISO: &str = platform::EXTRACT_XISO_EXECUTABLE;
+    const FFMPEG_LIBRARY: &str = platform::REPLACEABLE_LGPL_LIBRARIES[0];
+    const MOM_RUNTIME: &str = if cfg!(windows) {
+        "mom-runtime.exe"
+    } else {
+        "mom-runtime"
+    };
+
+    /// The complete COT runtime payload with distinct runtime and FFmpeg bytes.
+    fn cot_runtime_payload<'a>(runtime: &'a [u8], ffmpeg: &'a [u8]) -> Vec<(&'static str, &'a [u8])> {
+        COT_RUNTIME_REQUIRED_FILES
+            .iter()
+            .map(|&name| {
+                let bytes = if name == COT_RUNTIME_ENTRYPOINT {
+                    runtime
+                } else if name == FFMPEG_LIBRARY {
+                    ffmpeg
+                } else {
+                    name.as_bytes()
+                };
+                (name, bytes)
+            })
+            .collect()
+    }
+
+    fn toml_string_array(values: &[&str]) -> String {
+        let quoted = values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>();
+        format!("[{}]", quoted.join(", "))
+    }
+
+    fn launcher_binary(body: &[u8]) -> Vec<u8> {
+        [platform::LAUNCHER_EXECUTABLE_MAGIC, body].concat()
+    }
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0x5au8; 32])
@@ -4246,7 +4319,7 @@ mod tests {
         payload: &[u8],
         signing_key: &SigningKey,
     ) {
-        assert!(payload.starts_with(b"MZ"));
+        assert!(payload.starts_with(platform::LAUNCHER_EXECUTABLE_MAGIC));
         let payload_hash = Sha256::digest(payload);
         let mut hash_bytes = [0u8; 32];
         hash_bytes.copy_from_slice(&payload_hash);
@@ -4331,7 +4404,8 @@ mod tests {
     }
 
     fn valid_catalog() -> String {
-        r#"
+        format!(
+            r#"
 schema_version = 1
 channel = "stable"
 
@@ -4339,7 +4413,7 @@ channel = "stable"
 id = "launcher"
 kind = "launcher"
 version = "1.1.0"
-platform = "windows"
+platform = "{platform}"
 arch = "x86_64"
 url = "https://example.com/MojoRecomp-Launcher-1.1.0.exe"
 size = 1234
@@ -4354,7 +4428,7 @@ package = "portable-exe"
 id = "runtime.cot"
 kind = "runtime"
 version = "0.2.0"
-platform = "windows"
+platform = "{platform}"
 arch = "x86_64"
 url = "https://example.com/cot-runtime-0.2.0.zip"
 size = 4321
@@ -4363,14 +4437,16 @@ published = "2026-09-27"
 notes_url = "https://example.com/releases/cot-runtime-0.2.0"
 package = "zip"
 unpacked_size = 10000
-entrypoint = "cot-runtime.exe"
-required_files = ["cot-runtime.exe", "dxcompiler.dll", "dxil.dll", "mojorecomp-ffmpeg.dll", "mojorecomp-lzx.dll", "extract-xiso.exe"]
+entrypoint = "{COT_RUNTIME_ENTRYPOINT}"
+required_files = {required_files}
 game_id = "cot"
 
 [release.compatibility]
 min_launcher = "1.0.0"
-"#
-        .to_string()
+"#,
+            platform = platform::HOST_PLATFORM,
+            required_files = toml_string_array(COT_RUNTIME_REQUIRED_FILES),
+        )
     }
 
     fn test_root(name: &str) -> PathBuf {
@@ -4399,34 +4475,25 @@ min_launcher = "1.0.0"
         let file = File::create(&artifact).expect("artifact");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
-        let package_root = format!("MojoRecomp-COT-Runtime-{version}-windows-x64");
-        writer
-            .start_file(format!("{package_root}/cot-runtime.exe"), options)
-            .expect("runtime entry");
-        writer.write_all(runtime).expect("runtime");
-        writer
-            .start_file(format!("{package_root}/mojorecomp-ffmpeg.dll"), options)
-            .expect("ffmpeg entry");
-        writer.write_all(ffmpeg).expect("ffmpeg");
-        for (name, bytes) in [
-            ("dxcompiler.dll", b"dxc".as_slice()),
-            ("dxil.dll", b"dxil".as_slice()),
-            ("mojorecomp-lzx.dll", b"lzx".as_slice()),
-            ("extract-xiso.exe", b"xiso".as_slice()),
-        ] {
+        let package_root = format!(
+            "MojoRecomp-COT-Runtime-{version}-{}",
+            platform::RELEASE_TARGET
+        );
+        let payload = cot_runtime_payload(runtime, ffmpeg);
+        for (name, bytes) in &payload {
             writer
                 .start_file(format!("{package_root}/{name}"), options)
-                .expect("dependency entry");
-            writer.write_all(bytes).expect("dependency");
+                .expect("runtime payload entry");
+            writer.write_all(bytes).expect("runtime payload");
         }
         writer.finish().expect("finish zip");
         let package = fs::read(&artifact).expect("read artifact");
-        let unpacked_size = runtime.len() + ffmpeg.len() + 3 + 4 + 3 + 4;
+        let unpacked_size: usize = payload.iter().map(|(_, bytes)| bytes.len()).sum();
         ComponentRelease {
             id: "runtime.cot".into(),
             kind: ComponentKind::Runtime,
             version: version.into(),
-            platform: "windows".into(),
+            platform: platform::HOST_PLATFORM.into(),
             arch: "x86_64".into(),
             url: "https://example.com/cot-runtime.zip".into(),
             size: package.len() as u64,
@@ -4505,7 +4572,7 @@ min_launcher = "1.0.0"
         write_signed_launcher_executable(
             &artifact,
             version,
-            b"MZlauncher-binary",
+            &launcher_binary(b"launcher-binary"),
             &test_signing_key(),
         );
         let package = fs::read(&artifact).expect("read artifact");
@@ -4513,7 +4580,7 @@ min_launcher = "1.0.0"
             id: "launcher".into(),
             kind: ComponentKind::Launcher,
             version: version.into(),
-            platform: "windows".into(),
+            platform: platform::HOST_PLATFORM.into(),
             arch: "x86_64".into(),
             url: "https://example.com/launcher.exe".into(),
             size: package.len() as u64,
@@ -4557,35 +4624,28 @@ min_launcher = "1.0.0"
         let file = File::create(&path).expect("offline runtime package");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
-        let package_root = format!("MojoRecomp-COT-Runtime-{version}-windows-x64");
-        let payload: [(&str, &[u8]); 8] = [
-            ("cot-runtime.exe", runtime_payload),
-            ("dxcompiler.dll", b"dxc".as_slice()),
-            ("dxil.dll", b"dxil".as_slice()),
-            ("mojorecomp-ffmpeg.dll", b"ffmpeg".as_slice()),
-            ("mojorecomp-lzx.dll", b"lzx".as_slice()),
-            ("extract-xiso.exe", b"xiso".as_slice()),
+        let package_root = format!(
+            "MojoRecomp-COT-Runtime-{version}-{}",
+            platform::RELEASE_TARGET
+        );
+        let notices: [(&str, &[u8]); 2] = [
             ("LICENSE", b"license".as_slice()),
             ("THIRD_PARTY_NOTICES.txt", b"notices".as_slice()),
         ];
+        let mut payload = cot_runtime_payload(runtime_payload, b"ffmpeg");
+        payload.extend(notices);
         for (name, bytes) in payload {
             writer
                 .start_file(format!("{package_root}/{name}"), options)
                 .expect("offline runtime entry");
             writer.write_all(bytes).expect("offline runtime bytes");
         }
-        let signed_payload: [(&str, &[u8]); 8] = [
-            ("cot-runtime.exe", signed_runtime_payload),
-            ("dxcompiler.dll", b"dxc".as_slice()),
-            ("dxil.dll", b"dxil".as_slice()),
-            ("mojorecomp-ffmpeg.dll", b"ffmpeg".as_slice()),
-            ("mojorecomp-lzx.dll", b"lzx".as_slice()),
-            ("extract-xiso.exe", b"xiso".as_slice()),
-            ("LICENSE", b"license".as_slice()),
-            ("THIRD_PARTY_NOTICES.txt", b"notices".as_slice()),
-        ];
+        let mut signed_payload = cot_runtime_payload(signed_runtime_payload, b"ffmpeg");
+        signed_payload.extend(notices);
         let manifest = format!(
-            "schema_version = 2\nid = \"runtime.cot\"\nkind = \"runtime\"\nversion = \"{version}\"\nplatform = \"windows\"\narch = \"x86_64\"\npackage = \"zip\"\nentrypoint = \"cot-runtime.exe\"\nrequired_files = [\"cot-runtime.exe\", \"dxcompiler.dll\", \"dxil.dll\", \"mojorecomp-ffmpeg.dll\", \"mojorecomp-lzx.dll\", \"extract-xiso.exe\"]\nmin_launcher = \"{min_launcher}\"\n\n{}\n",
+            "schema_version = 2\nid = \"runtime.cot\"\nkind = \"runtime\"\nversion = \"{version}\"\nplatform = \"{}\"\narch = \"x86_64\"\npackage = \"zip\"\nentrypoint = \"{COT_RUNTIME_ENTRYPOINT}\"\nrequired_files = {}\nmin_launcher = \"{min_launcher}\"\n\n{}\n",
+            platform::HOST_PLATFORM,
+            toml_string_array(COT_RUNTIME_REQUIRED_FILES),
             signed_manifest_files(&signed_payload)
         );
         write_signed_package_metadata(&mut writer, &package_root, &manifest, &test_signing_key());
@@ -4691,9 +4751,12 @@ min_launcher = "1.0.0"
         let file = File::create(&path).expect("offline MOM runtime package");
         let mut writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
-        let package_root = format!("MojoRecomp-MOM-Runtime-{version}-windows-x64");
+        let package_root = format!(
+            "MojoRecomp-MOM-Runtime-{version}-{}",
+            platform::RELEASE_TARGET
+        );
         let payload: [(&str, &[u8]); 3] = [
-            ("mom-runtime.exe", b"mom-runtime".as_slice()),
+            (MOM_RUNTIME, b"mom-runtime".as_slice()),
             ("LICENSE", b"license".as_slice()),
             ("THIRD_PARTY_NOTICES.txt", b"notices".as_slice()),
         ];
@@ -4704,7 +4767,8 @@ min_launcher = "1.0.0"
             writer.write_all(bytes).expect("offline MOM runtime bytes");
         }
         let manifest = format!(
-            "schema_version = 2\nid = \"runtime.mom\"\nkind = \"runtime\"\nversion = \"{version}\"\nplatform = \"windows\"\narch = \"x86_64\"\npackage = \"zip\"\nentrypoint = \"mom-runtime.exe\"\nrequired_files = [\"mom-runtime.exe\"]\nmin_launcher = \"1.1.0\"\n\n{}\n",
+            "schema_version = 2\nid = \"runtime.mom\"\nkind = \"runtime\"\nversion = \"{version}\"\nplatform = \"{}\"\narch = \"x86_64\"\npackage = \"zip\"\nentrypoint = \"{MOM_RUNTIME}\"\nrequired_files = [\"{MOM_RUNTIME}\"]\nmin_launcher = \"1.1.0\"\n\n{}\n",
+            platform::HOST_PLATFORM,
             signed_manifest_files(&payload)
         );
         write_signed_package_metadata(&mut writer, &package_root, &manifest, &test_signing_key());
@@ -4809,8 +4873,8 @@ min_launcher = "1.0.0"
             .expect("inspect signed MOM runtime");
         assert_eq!(release.id, "runtime.mom");
         assert_eq!(release.game_id.as_deref(), Some("mom"));
-        assert_eq!(release.entrypoint.as_deref(), Some("mom-runtime.exe"));
-        assert_eq!(release.required_files, vec!["mom-runtime.exe"]);
+        assert_eq!(release.entrypoint.as_deref(), Some(MOM_RUNTIME));
+        assert_eq!(release.required_files, vec![MOM_RUNTIME]);
         assert_eq!(release.version, "0.1.0");
         let _ = fs::remove_dir_all(root);
     }
@@ -4886,36 +4950,85 @@ min_launcher = "1.0.0"
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(windows)]
     #[test]
     fn launcher_replacement_backup_restores_old_files_and_removes_new_files() {
         let root = test_root("launcher-replacement-rollback");
         let target = root.join("target");
         let source = root.join("source");
         let backup = root.join("backup");
+        let launcher = "mojorecomp-launcher.exe";
         fs::create_dir_all(&target).expect("target");
         fs::create_dir_all(&source).expect("source");
-        fs::write(target.join("mojorecomp-launcher.exe"), b"old").expect("old launcher");
+        fs::write(target.join(launcher), b"old").expect("old launcher");
         fs::write(target.join("README.txt"), b"old readme").expect("old readme");
         fs::write(target.join(OFFLINE_PACKAGE_MANIFEST), b"legacy manifest")
             .expect("legacy manifest");
-        fs::write(source.join("mojorecomp-launcher.exe"), b"new").expect("new launcher");
+        fs::write(source.join(launcher), b"new").expect("new launcher");
 
-        backup_launcher_replacement_tree(&target, &backup).expect("backup launcher");
-        apply_launcher_replacement_tree(&source, &target).expect("replace launcher");
+        backup_launcher_replacement_tree(&target, launcher, &backup).expect("backup launcher");
+        apply_launcher_replacement_tree(&source, &target, launcher).expect("replace launcher");
         assert!(!target.join("README.txt").exists());
         assert!(!target.join(OFFLINE_PACKAGE_MANIFEST).exists());
-        restore_launcher_replacement_tree(&target, &backup).expect("restore launcher");
+        restore_launcher_replacement_tree(&target, launcher, &backup).expect("restore launcher");
 
-        assert_eq!(
-            fs::read(target.join("mojorecomp-launcher.exe")).unwrap(),
-            b"old"
-        );
+        assert_eq!(fs::read(target.join(launcher)).unwrap(), b"old");
         assert_eq!(fs::read(target.join("README.txt")).unwrap(), b"old readme");
         assert_eq!(
             fs::read(target.join(OFFLINE_PACKAGE_MANIFEST)).unwrap(),
             b"legacy manifest"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_replacement_keeps_the_user_file_name_and_neighbor_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = test_root("appimage-replacement-rollback");
+        let target = root.join("Downloads");
+        let source = root.join("source");
+        let backup = root.join("backup");
+        let launcher = "MojoRecomp-Launcher-1.1.0-linux-x64.AppImage";
+        fs::create_dir_all(&target).expect("target");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(target.join(launcher), b"old").expect("old launcher");
+        fs::write(target.join("README.txt"), b"unrelated user file").expect("user file");
+        fs::write(source.join(platform::LAUNCHER_ARTIFACT_NAME), b"new").expect("new launcher");
+
+        backup_launcher_replacement_tree(&target, launcher, &backup).expect("backup launcher");
+        apply_launcher_replacement_tree(&source, &target, launcher).expect("replace launcher");
+        assert_eq!(fs::read(target.join(launcher)).unwrap(), b"new");
+        let mode = fs::metadata(target.join(launcher)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "replaced AppImage must stay executable");
+        assert_eq!(
+            fs::read(target.join("README.txt")).unwrap(),
+            b"unrelated user file"
+        );
+        assert!(!target.join(platform::LAUNCHER_ARTIFACT_NAME).exists());
+
+        restore_launcher_replacement_tree(&target, launcher, &backup).expect("restore launcher");
+        assert_eq!(fs::read(target.join(launcher)).unwrap(), b"old");
+        let mode = fs::metadata(target.join(launcher)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "restored AppImage must stay executable");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn language_packages_keep_their_shared_windows_tag_on_every_platform() {
+        assert!(targets_host(&ComponentKind::Language, "windows", "x86_64"));
+        assert!(targets_host(
+            &ComponentKind::Runtime,
+            platform::HOST_PLATFORM,
+            "x86_64"
+        ));
+        assert!(!targets_host(&ComponentKind::Runtime, "macos", "x86_64"));
+        assert!(!targets_host(&ComponentKind::Language, "windows", "aarch64"));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(!targets_host(&ComponentKind::Runtime, "windows", "x86_64"));
+            assert!(!targets_host(&ComponentKind::Launcher, "windows", "x86_64"));
+        }
     }
 
     #[test]
@@ -5382,9 +5495,9 @@ min_launcher = "1.0.0"
         let mut manifest: InstalledManifest = read_toml(&manifest_path).expect("legacy manifest");
         manifest
             .files
-            .retain(|file| file.path != "extract-xiso.exe");
+            .retain(|file| file.path != EXTRACT_XISO);
         write_toml_atomic(&manifest_path, &manifest).expect("rewrite legacy manifest");
-        fs::remove_file(version_root.join("payload").join("extract-xiso.exe"))
+        fs::remove_file(version_root.join("payload").join(EXTRACT_XISO))
             .expect("remove legacy extract-xiso");
         assert!(source.verify_version("runtime.cot", "0.2.0").is_ok());
 
@@ -5479,9 +5592,9 @@ min_launcher = "1.0.0"
         let mut manifest: InstalledManifest = read_toml(&manifest_path).expect("runtime manifest");
         manifest
             .files
-            .retain(|file| file.path != "extract-xiso.exe");
+            .retain(|file| file.path != EXTRACT_XISO);
         write_toml_atomic(&manifest_path, &manifest).expect("write incomplete manifest");
-        fs::remove_file(destination_version.join("payload").join("extract-xiso.exe"))
+        fs::remove_file(destination_version.join("payload").join(EXTRACT_XISO))
             .expect("remove extractor");
 
         assert!(
@@ -5503,7 +5616,7 @@ min_launcher = "1.0.0"
                 destination
                     .version_root("runtime.cot", "0.2.0")
                     .join("payload")
-                    .join("cot-runtime.exe")
+                    .join(COT_RUNTIME_ENTRYPOINT)
             )
             .expect("read migrated runtime"),
             b"new-runtime"
@@ -5517,14 +5630,7 @@ min_launcher = "1.0.0"
         let root = test_root("legacy-runtime-import");
         let source = root.join("legacy-runtime");
         fs::create_dir_all(&source).expect("legacy runtime root");
-        for (name, bytes) in [
-            ("cot-runtime.exe", b"runtime".as_slice()),
-            ("dxcompiler.dll", b"dxc".as_slice()),
-            ("dxil.dll", b"dxil".as_slice()),
-            ("mojorecomp-ffmpeg.dll", b"ffmpeg".as_slice()),
-            ("mojorecomp-lzx.dll", b"lzx".as_slice()),
-            ("extract-xiso.exe", b"xiso".as_slice()),
-        ] {
+        for (name, bytes) in cot_runtime_payload(b"runtime", b"ffmpeg") {
             fs::write(source.join(name), bytes).expect("legacy runtime file");
         }
         let store = ComponentStore::with_roots(
@@ -5554,7 +5660,7 @@ min_launcher = "1.0.0"
                 .unwrap()
                 .unwrap()
                 .root
-                .join("extract-xiso.exe")
+                .join(EXTRACT_XISO)
                 .is_file()
         );
         fs::remove_dir_all(root).unwrap();
@@ -5612,7 +5718,7 @@ min_launcher = "1.0.0"
         manifest.entrypoint = Some(COT_RUNTIME_ENTRYPOINT.into());
         manifest
             .files
-            .retain(|file| file.path != "extract-xiso.exe");
+            .retain(|file| file.path != EXTRACT_XISO);
         write_toml_atomic(&manifest_path, &manifest).expect("write incomplete manifest");
         assert!(
             !store
@@ -5638,22 +5744,15 @@ min_launcher = "1.0.0"
         let mut manifest: InstalledManifest = read_toml(&manifest_path).expect("runtime manifest");
         manifest
             .files
-            .retain(|file| file.path != "extract-xiso.exe");
+            .retain(|file| file.path != EXTRACT_XISO);
         write_toml_atomic(&manifest_path, &manifest).expect("write incomplete manifest");
-        fs::remove_file(version_root.join("payload").join("extract-xiso.exe"))
+        fs::remove_file(version_root.join("payload").join(EXTRACT_XISO))
             .expect("remove extractor");
         assert!(store.active_status("runtime.cot").unwrap().unwrap().healthy);
 
         let source = root.join("legacy-runtime");
         fs::create_dir_all(&source).expect("legacy runtime root");
-        for (name, bytes) in COT_RUNTIME_REQUIRED_FILES.iter().zip([
-            b"new-runtime".as_slice(),
-            b"dxc".as_slice(),
-            b"dxil".as_slice(),
-            b"new-ffmpeg".as_slice(),
-            b"lzx".as_slice(),
-            b"xiso".as_slice(),
-        ]) {
+        for (name, bytes) in cot_runtime_payload(b"new-runtime", b"new-ffmpeg") {
             fs::write(source.join(name), bytes).expect("legacy runtime file");
         }
 
@@ -5692,7 +5791,7 @@ min_launcher = "1.0.0"
             store
                 .version_root("runtime.cot", "0.3.0")
                 .join("payload")
-                .join("cot-runtime.exe"),
+                .join(COT_RUNTIME_ENTRYPOINT),
             b"corrupted",
         )
         .expect("corrupt active runtime");
@@ -5846,7 +5945,7 @@ min_launcher = "1.0.0"
             .stage_launcher_ready_with_key(&release, &key)
             .expect("stage launcher executable");
         assert!(ready.join("ready.toml").is_file());
-        assert!(ready.join("mojorecomp-launcher.exe").is_file());
+        assert!(ready.join(platform::LAUNCHER_ARTIFACT_NAME).is_file());
         let prepared = store
             .prepare_launcher_replacement_with_key(&key)
             .expect("prepare signed launcher executable");
@@ -5854,7 +5953,7 @@ min_launcher = "1.0.0"
         assert!(
             prepared
                 .source_root
-                .join("mojorecomp-launcher.exe")
+                .join(platform::LAUNCHER_ARTIFACT_NAME)
                 .is_file()
         );
         assert!(!store.staging_component_root("launcher").unwrap().exists());
@@ -5873,7 +5972,7 @@ min_launcher = "1.0.0"
         let path = root.join("launcher.exe");
         let signing_key = test_signing_key();
         let verifying_key = signing_key.verifying_key();
-        write_signed_launcher_executable(&path, "1.2.0", b"MZlauncher", &signing_key);
+        write_signed_launcher_executable(&path, "1.2.0", &launcher_binary(b"launcher"), &signing_key);
 
         assert_eq!(
             verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), &verifying_key)
@@ -5886,7 +5985,7 @@ min_launcher = "1.0.0"
         assert!(wrong_version.contains("does not match expected version"));
 
         let mut tampered = fs::read(&path).expect("signed launcher bytes");
-        tampered[2] ^= 0x01;
+        tampered[platform::LAUNCHER_EXECUTABLE_MAGIC.len()] ^= 0x01;
         fs::write(&path, tampered).expect("tampered launcher");
         let tampered_error =
             verify_signed_launcher_executable_with_key(&path, Some("1.2.0"), &verifying_key)
@@ -5938,7 +6037,7 @@ min_launcher = "1.0.0"
             store
                 .version_root("runtime.cot", "0.3.0")
                 .join("payload")
-                .join("cot-runtime.exe"),
+                .join(COT_RUNTIME_ENTRYPOINT),
             b"interrupted-corrupt-runtime",
         )
         .expect("corrupt committed version");
@@ -6127,14 +6226,14 @@ required_files = ["language-patches.toml", "mojorecomp-package.toml", "mojorecom
         store.install_staged(&release).expect("install");
         let overrides = root.join("lgpl-overrides");
         fs::create_dir_all(&overrides).expect("override root");
-        fs::write(overrides.join("mojorecomp-ffmpeg.dll"), b"modified-ffmpeg").expect("override");
+        fs::write(overrides.join(FFMPEG_LIBRARY), b"modified-ffmpeg").expect("override");
         let runtime = store
             .prepare_runtime_launch("runtime.cot", &overrides)
             .expect("prepare")
             .expect("active runtime");
         assert_eq!(fs::read(&runtime).unwrap(), b"runtime-v2");
         assert_eq!(
-            fs::read(runtime.parent().unwrap().join("mojorecomp-ffmpeg.dll")).unwrap(),
+            fs::read(runtime.parent().unwrap().join(FFMPEG_LIBRARY)).unwrap(),
             b"modified-ffmpeg"
         );
         assert_eq!(
@@ -6142,7 +6241,7 @@ required_files = ["language-patches.toml", "mojorecomp-package.toml", "mojorecom
                 store
                     .version_root("runtime.cot", "0.2.0")
                     .join("payload")
-                    .join("mojorecomp-ffmpeg.dll")
+                    .join(FFMPEG_LIBRARY)
             )
             .unwrap(),
             b"official-ffmpeg"

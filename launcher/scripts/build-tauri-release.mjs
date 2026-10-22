@@ -4,19 +4,28 @@ import { fileURLToPath } from "node:url";
 
 const launcherRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const projectRoot = resolve(launcherRoot, "..");
-const userProfile = process.env.USERPROFILE ? resolve(process.env.USERPROFILE) : null;
+const isWindows = process.platform === "win32";
+const userProfileVariable = isWindows ? process.env.USERPROFILE : process.env.HOME;
+const userProfile = userProfileVariable ? resolve(userProfileVariable) : null;
 const unitSeparator = String.fromCharCode(0x1f);
 
 const rustFlags = [];
+const sourceReplacement = isWindows ? "C:\\src\\MojoRecomp" : "/src/MojoRecomp";
+const userReplacement = isWindows ? "C:\\build-user" : "/build-user";
 for (const [source, replacement] of [
-  [projectRoot, "C:\\src\\MojoRecomp"],
-  [userProfile, "C:\\build-user"],
+  [projectRoot, sourceReplacement],
+  [userProfile, userReplacement],
 ]) {
   if (!source) continue;
   rustFlags.push("--remap-path-prefix", `${source}=${replacement}`);
 }
 
-const pathMapFlags = userProfile ? ` /pathmap:${userProfile}=C:\\build-user` : "";
+// MSVC and GCC/Clang spell the C/C++ source path remapping flag differently.
+const pathMapFlags = !userProfile
+  ? ""
+  : isWindows
+    ? ` /pathmap:${userProfile}=${userReplacement}`
+    : ` -ffile-prefix-map=${userProfile}=${userReplacement}`;
 const env = {
   ...process.env,
   CARGO_ENCODED_RUSTFLAGS: rustFlags.join(unitSeparator),
