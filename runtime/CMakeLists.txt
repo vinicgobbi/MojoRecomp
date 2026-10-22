@@ -8,6 +8,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(MOJORECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+# OFF configures only the game-independent tests, so they can run in CI and on
+# hosts that have no ppc/ output, patched work trees, or prebuilt dependencies.
+option(MOJORECOMP_GUEST_IMAGE
+    "Build the translated guest image, the runtime executables, and their probes" ON)
+
 if(WIN32)
     enable_language(RC)
     file(TO_CMAKE_PATH
@@ -18,6 +24,12 @@ if(WIN32)
 endif()
 set(MOJORECOMP_TOMLPLUSPLUS_ROOT
     "${MOJORECOMP_ROOT}/thirdparty/work/XenonRecomp/thirdparty/tomlplusplus/include")
+# MojoRecomp does not patch tomlplusplus, so the pristine submodule is an
+# equivalent source when setup has not created the work tree yet.
+if(NOT EXISTS "${MOJORECOMP_TOMLPLUSPLUS_ROOT}/toml++/toml.hpp")
+    set(MOJORECOMP_TOMLPLUSPLUS_ROOT
+        "${MOJORECOMP_ROOT}/thirdparty/XenonRecomp/thirdparty/tomlplusplus/include")
+endif()
 
 set(MOJORECOMP_VERSION_FILE "${MOJORECOMP_ROOT}/version.toml")
 if(NOT EXISTS "${MOJORECOMP_VERSION_FILE}")
@@ -177,6 +189,11 @@ if(BUILD_TESTING)
         kernel/rcf_diagnostics.cpp)
     add_test(NAME RcfDiagnostics COMMAND MojoRecompRcfDiagnosticsTest)
     set_tests_properties(RcfDiagnostics PROPERTIES TIMEOUT 10 LABELS "kernel;diagnostics")
+endif()
+
+if(NOT MOJORECOMP_GUEST_IMAGE)
+    message(STATUS "MOJORECOMP_GUEST_IMAGE is OFF: configuring game-independent tests only")
+    return()
 endif()
 
 set(MOJORECOMP_VULKAN_HEADERS "${MOJORECOMP_ROOT}/thirdparty/Vulkan-Headers/include")

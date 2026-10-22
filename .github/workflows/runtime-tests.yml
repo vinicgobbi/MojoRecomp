@@ -1,0 +1,58 @@
+# Builds and runs the game-independent runtime tests on Windows and Linux.
+# MOJORECOMP_GUEST_IMAGE=OFF skips the translated guest image, so no game data,
+# ppc/ output, or setup work tree is needed.
+name: Runtime tests
+
+on:
+  pull_request:
+    paths:
+      - "runtime/**"
+      - "version.toml"
+      - ".github/workflows/runtime-tests.yml"
+  push:
+    branches: [main, development]
+    paths:
+      - "runtime/**"
+      - "version.toml"
+      - ".github/workflows/runtime-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-latest
+            configure: -G "Visual Studio 17 2022" -A x64 -T ClangCL
+          - target: linux-x64
+            os: ubuntu-24.04
+            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      # Only tomlplusplus is needed, and it is reached through XenonRecomp.
+      - name: Fetch test dependencies
+        run: |
+          git submodule update --init --depth 1 thirdparty/XenonRecomp
+          git -C thirdparty/XenonRecomp submodule update --init --depth 1 \
+            thirdparty/tomlplusplus
+
+      - name: Configure
+        run: >
+          cmake -S runtime -B build ${{ matrix.configure }}
+          -DCMAKE_BUILD_TYPE=Release -DMOJORECOMP_GUEST_IMAGE=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

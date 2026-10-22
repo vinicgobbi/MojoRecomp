@@ -1,10 +1,15 @@
 // Synthetic PM4 regression: screen-extent writeback is not EVENT_WRITE_SHD.
 // No executable, shader, or other game data is used by this test.
+#if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
 #include "../gpu/pm4.h"
 #include "../gpu/xenos.h"
 #include "../title_resources.h"
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,16 +25,48 @@ void StoreBe32(uint8_t* destination, uint32_t value)
     destination[3] = static_cast<uint8_t>(value);
 }
 
+constexpr size_t kGuestSpaceSize = 1ull << 32;
+
+// Reserves the 4 GiB guest space without access and makes one window writable.
+uint8_t* ReserveGuestSpace(uint32_t windowOffset, size_t windowSize)
+{
+#if defined(_WIN32)
+    auto* base = static_cast<uint8_t*>(VirtualAlloc(nullptr, kGuestSpaceSize,
+                                                   MEM_RESERVE, PAGE_NOACCESS));
+    if (!base) return nullptr;
+    if (!VirtualAlloc(base + windowOffset, windowSize, MEM_COMMIT, PAGE_READWRITE)) {
+        VirtualFree(base, 0, MEM_RELEASE);
+        return nullptr;
+    }
+    return base;
+#else
+    void* mapping = mmap(nullptr, kGuestSpaceSize, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (mapping == MAP_FAILED) return nullptr;
+    auto* base = static_cast<uint8_t*>(mapping);
+    if (mprotect(base + windowOffset, windowSize, PROT_READ | PROT_WRITE) != 0) {
+        munmap(base, kGuestSpaceSize);
+        return nullptr;
+    }
+    return base;
+#endif
+}
+
+void ReleaseGuestSpace(uint8_t* base)
+{
+#if defined(_WIN32)
+    VirtualFree(base, 0, MEM_RELEASE);
+#else
+    munmap(base, kGuestSpaceSize);
+#endif
+}
+
 } // namespace
 
 int main()
 {
-    auto* base = static_cast<uint8_t*>(VirtualAlloc(nullptr, 1ull << 32,
-                                                   MEM_RESERVE, PAGE_NOACCESS));
+    uint8_t* base = ReserveGuestSpace(0xA0001000u, 8192);
     if (!base) return 1;
-    const bool committed = VirtualAlloc(base + 0xA0001000u, 8192,
-        MEM_COMMIT, PAGE_READWRITE) != nullptr;
-    if (!committed) { VirtualFree(base, 0, MEM_RELEASE); return 1; }
     auto store = [&](uint32_t address, uint32_t value) {
         value = __builtin_bswap32(value);
         std::memcpy(base + address, &value, sizeof(value));
@@ -107,7 +144,7 @@ int main()
                 binkFamilyValid && binkRejectsWrongFamily && binkPathValid
                     ? "PASS" : "FAIL");
 
-    VirtualFree(base, 0, MEM_RELEASE);
+    ReleaseGuestSpace(base);
     return valid && constantsValid && binkFamilyValid && binkRejectsWrongFamily &&
            binkPathValid ? 0 : 1;
 }

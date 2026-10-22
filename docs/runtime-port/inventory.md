@@ -88,9 +88,12 @@ Xbox API and are platform-neutral.
 ### Tests
 
 `tests/window_mode_test.cpp`, `tests/texture_gpu_probe.cpp`,
-`tests/guest_memory_snapshot_test.cpp`, `tests/event_probe.cpp`,
-`tests/input_probe.cpp`, and `tests/pm4_extent_probe.cpp` use Win32 directly
-or link Windows libraries. They move with the code they test.
+`tests/guest_memory_snapshot_test.cpp`, `tests/event_probe.cpp`, and
+`tests/input_probe.cpp` use Win32 directly or link Windows libraries. They
+move with the code they test. `tests/guest_memory_snapshot_test.cpp` already
+builds and passes on Linux, but its write-watch checks only run on Windows
+until RP-07. `tests/pm4_extent_probe.cpp` reserves its guest space with
+`mmap` on Linux (RP-01).
 
 ## Build system
 
@@ -98,9 +101,9 @@ or link Windows libraries. They move with the code they test.
   (`MojoRecompBootProbe`, shipped as `cot-runtime.exe`) inside `if(WIN32)`. On
   other hosts only the unit tests and `MojoRecompSmoke` would be defined.
 - Configuration stops with a fatal error when `ppc/ppc_func_mapping.cpp` is
-  missing, so even game-independent unit tests cannot be configured without a
-  locally generated guest image. CI cannot provide one (the image is derived
-  from the game executable).
+  missing. `-DMOJORECOMP_GUEST_IMAGE=OFF` configures only the
+  game-independent tests, which `runtime-tests.yml` runs in CI on both hosts
+  (RP-01). They need only the XenonRecomp submodule for tomlplusplus.
 - MSVC-ABI assumptions: static MSVC runtime, `/EHsc`, `/O2`, `/WHOLEARCHIVE`,
   `/FI`, `.rc` resources, `clang_rt.builtins-x86_64.lib`, and `.lib` imports of
   XenonUtils `fmt.lib` and `xxhash.lib`. Some already have GCC/Clang branches
@@ -159,5 +162,5 @@ survey:
   matches the pinned Windows binaries.
 - `tools/ffmpeg-rexglue` and `tools/libmspack-lzx` build shared libraries on
   Linux with the same exported surface.
-- `MojoRecompSmoke` and the unit tests under `runtime/tests/` build and pass
-  on Linux once configuration no longer requires a guest image.
+- `MojoRecompSmoke` builds on Linux. (The 16 game-independent tests build
+  and pass on Linux with GCC; Clang on Linux is covered by CI.)

@@ -281,6 +281,15 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run build:production
 ```
 
+Game-independent runtime tests (Windows and Linux, no `ppc/` or game data
+needed; requires the `thirdparty/XenonRecomp` submodule):
+
+```sh
+cmake -S runtime -B build/runtime-tests -DMOJORECOMP_GUEST_IMAGE=OFF
+cmake --build build/runtime-tests --config Release
+ctest --test-dir build/runtime-tests -C Release --output-on-failure
+```
+
 Python tools are invoked directly, for example `python3 tools/recompile.py`
 (`py -3 tools\recompile.py` on Windows).
 
