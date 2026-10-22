@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 is in progress. The launcher already runs
+Status: **in progress**. RP-01 and RP-02 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -46,7 +46,7 @@ the package section when a package changes state, and update
 | ID | Package | Phase | Depends on | Status |
 | --- | --- | --- | --- | --- |
 | RP-01 | Configure and test the runtime without a guest image | 0 Foundations | - | in progress |
-| RP-02 | Portable CMake toolchain and presets | 0 Foundations | RP-01 | todo |
+| RP-02 | Portable CMake toolchain and presets | 0 Foundations | RP-01 | in progress |
 | RP-03 | Cross-platform setup entry point (replaces `setup.bat`) | 0 Foundations | RP-02 | todo |
 | RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | todo |
 | RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | todo |

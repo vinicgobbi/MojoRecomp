@@ -26,12 +26,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The windows-clang-cl-tests preset expects the local
+          # thirdparty/llvm22 toolchain, so CI uses the runner's ClangCL.
           - target: windows-x64
             os: windows-latest
-            configure: -G "Visual Studio 17 2022" -A x64 -T ClangCL
+            workdir: .
+            configure: >-
+              -S runtime -B runtime/build-ci -G "Visual Studio 17 2022" -A x64
+              -T ClangCL -DMOJORECOMP_GUEST_IMAGE=OFF
+            build: --build runtime/build-ci --config Release --parallel
+            test: --test-dir runtime/build-ci -C Release --output-on-failure
           - target: linux-x64
             os: ubuntu-24.04
-            configure: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+            workdir: runtime
+            configure: --preset linux-clang-tests
+            build: --build --preset linux-clang-tests --parallel
+            test: --preset linux-clang-tests
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -46,13 +56,18 @@ jobs:
           git -C thirdparty/XenonRecomp submodule update --init --depth 1 \
             thirdparty/tomlplusplus
 
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build
+
       - name: Configure
-        run: >
-          cmake -S runtime -B build ${{ matrix.configure }}
-          -DCMAKE_BUILD_TYPE=Release -DMOJORECOMP_GUEST_IMAGE=OFF
+        working-directory: ${{ matrix.workdir }}
+        run: cmake ${{ matrix.configure }}
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        working-directory: ${{ matrix.workdir }}
+        run: cmake ${{ matrix.build }}
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        working-directory: ${{ matrix.workdir }}
+        run: ctest ${{ matrix.test }}

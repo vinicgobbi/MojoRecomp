@@ -105,9 +105,16 @@ until RP-07. `tests/pm4_extent_probe.cpp` reserves its guest space with
   game-independent tests, which `runtime-tests.yml` runs in CI on both hosts
   (RP-01). They need only the XenonRecomp submodule for tomlplusplus.
 - MSVC-ABI assumptions: static MSVC runtime, `/EHsc`, `/O2`, `/WHOLEARCHIVE`,
-  `/FI`, `.rc` resources, `clang_rt.builtins-x86_64.lib`, and `.lib` imports of
-  XenonUtils `fmt.lib` and `xxhash.lib`. Some already have GCC/Clang branches
-  (`-include`, `--whole-archive`).
+  `/MAP`, `/FI`, and `.rc` resources. CRT, exception, optimization,
+  forced-include, and whole-archive flags are selected by compiler family.
+  The remaining MSVC-only flags belong to the Windows runtime executable,
+  which RP-19 mirrors for Linux.
+- XenonUtils `fmt` and `xxhash` archives are located by the platform's
+  static-library prefix and suffix, and `clang_rt.builtins` is located in the
+  active clang-cl's resource directory instead of a fixed `llvm22` path
+  (RP-02). Thin LTO links through `lld` with the GNU-driver Clang.
+- `runtime/CMakePresets.json` defines `windows-clang-cl` and `linux-clang`
+  presets plus `-tests` variants that configure without a guest image.
 - Windows link libraries: `onecore`, `winmm`, `dbghelp`, `user32`, `gdi32`,
   `imm32`, `ole32`, `oleaut32`, `version`, `uuid`, `advapi32`, `setupapi`,
   `shell32`, `hid`, `dinput8`.

@@ -1,0 +1,122 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Run from an x64 Visual Studio developer environment.",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "${sourceParentDir}/thirdparty/llvm22/bin/clang-cl.exe",
+        "CMAKE_CXX_COMPILER": "${sourceParentDir}/thirdparty/llvm22/bin/clang-cl.exe"
+      }
+    },
+    {
+      "name": "linux",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "tests-only",
+      "hidden": true,
+      "cacheVariables": {
+        "MOJORECOMP_GUEST_IMAGE": "OFF"
+      }
+    },
+    {
+      "name": "windows-clang-cl",
+      "displayName": "Windows runtime (clang-cl)",
+      "inherits": "windows"
+    },
+    {
+      "name": "windows-clang-cl-tests",
+      "displayName": "Windows game-independent tests (clang-cl)",
+      "inherits": ["tests-only", "windows"]
+    },
+    {
+      "name": "linux-clang",
+      "displayName": "Linux runtime (Clang)",
+      "inherits": "linux"
+    },
+    {
+      "name": "linux-clang-tests",
+      "displayName": "Linux game-independent tests (Clang)",
+      "inherits": ["tests-only", "linux"]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-clang-cl",
+      "configurePreset": "windows-clang-cl"
+    },
+    {
+      "name": "windows-clang-cl-tests",
+      "configurePreset": "windows-clang-cl-tests"
+    },
+    {
+      "name": "linux-clang",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-clang-tests",
+      "configurePreset": "linux-clang-tests"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-clang-cl",
+      "inherits": "base",
+      "configurePreset": "windows-clang-cl"
+    },
+    {
+      "name": "windows-clang-cl-tests",
+      "inherits": "base",
+      "configurePreset": "windows-clang-cl-tests"
+    },
+    {
+      "name": "linux-clang",
+      "inherits": "base",
+      "configurePreset": "linux-clang"
+    },
+    {
+      "name": "linux-clang-tests",
+      "inherits": "base",
+      "configurePreset": "linux-clang-tests"
+    }
+  ]
+}

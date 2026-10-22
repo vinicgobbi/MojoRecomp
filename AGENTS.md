@@ -285,10 +285,14 @@ Game-independent runtime tests (Windows and Linux, no `ppc/` or game data
 needed; requires the `thirdparty/XenonRecomp` submodule):
 
 ```sh
-cmake -S runtime -B build/runtime-tests -DMOJORECOMP_GUEST_IMAGE=OFF
-cmake --build build/runtime-tests --config Release
-ctest --test-dir build/runtime-tests -C Release --output-on-failure
+cd runtime
+cmake --preset linux-clang-tests        # windows-clang-cl-tests on Windows
+cmake --build --preset linux-clang-tests
+ctest --preset linux-clang-tests
 ```
+
+The Windows presets expect an x64 Visual Studio developer environment and the
+local `thirdparty/llvm22` toolchain.
 
 Python tools are invoked directly, for example `python3 tools/recompile.py`
 (`py -3 tools\recompile.py` on Windows).

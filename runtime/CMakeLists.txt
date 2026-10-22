@@ -116,6 +116,12 @@ function(mojorecomp_enable_lto TARGET_NAME)
            NOT MOJORECOMP_OPT_TARGET_TYPE STREQUAL "OBJECT_LIBRARY")
             target_link_options(${TARGET_NAME} PRIVATE
                 "$<$<CONFIG:Release>:-flto=thin>")
+            # The GNU-driver Clang links through the system linker by default,
+            # which cannot read ThinLTO bitcode. clang-cl already uses lld-link.
+            if(NOT MSVC)
+                target_link_options(${TARGET_NAME} PRIVATE
+                    "$<$<CONFIG:Release>:-fuse-ld=lld>")
+            endif()
         endif()
     endif()
 
@@ -219,10 +225,39 @@ if(WIN32 AND
 endif()
 
 set(XENON_BUILD "${MOJORECOMP_ROOT}/thirdparty/build/XenonRecomp")
-set(XENON_FMT "${XENON_BUILD}/thirdparty/fmt/fmt.lib")
-set(XENON_XXHASH "${XENON_BUILD}/thirdparty/xxHash/cmake_unofficial/xxhash.lib")
-set(CLANG_BUILTINS
-    "${MOJORECOMP_ROOT}/thirdparty/llvm22/lib/clang/22/lib/windows/clang_rt.builtins-x86_64.lib")
+set(XENON_FMT
+    "${XENON_BUILD}/thirdparty/fmt/${CMAKE_STATIC_LIBRARY_PREFIX}fmt${CMAKE_STATIC_LIBRARY_SUFFIX}")
+set(XENON_XXHASH
+    "${XENON_BUILD}/thirdparty/xxHash/cmake_unofficial/${CMAKE_STATIC_LIBRARY_PREFIX}xxhash${CMAKE_STATIC_LIBRARY_SUFFIX}")
+
+# clang-cl emits calls to compiler-rt builtins that the MSVC runtime does not
+# provide. Locate the archive in the active compiler's resource directory,
+# covering both the legacy and the per-target runtime layouts.
+set(CLANG_BUILTINS "")
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC)
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+        RESULT_VARIABLE MOJORECOMP_CLANG_RESOURCE_RESULT
+        OUTPUT_VARIABLE MOJORECOMP_CLANG_RESOURCE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(MOJORECOMP_CLANG_RESOURCE_RESULT EQUAL 0)
+        file(TO_CMAKE_PATH "${MOJORECOMP_CLANG_RESOURCE_DIR}" MOJORECOMP_CLANG_RESOURCE_DIR)
+        foreach(MOJORECOMP_BUILTINS_CANDIDATE
+                "lib/windows/clang_rt.builtins-x86_64.lib"
+                "lib/x86_64-pc-windows-msvc/clang_rt.builtins.lib")
+            if(EXISTS "${MOJORECOMP_CLANG_RESOURCE_DIR}/${MOJORECOMP_BUILTINS_CANDIDATE}")
+                set(CLANG_BUILTINS
+                    "${MOJORECOMP_CLANG_RESOURCE_DIR}/${MOJORECOMP_BUILTINS_CANDIDATE}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(NOT CLANG_BUILTINS)
+        message(FATAL_ERROR
+            "Could not find clang_rt.builtins for ${CMAKE_CXX_COMPILER}")
+    endif()
+endif()
 
 set(MOJORECOMP_FFMPEG_ROOT "" CACHE PATH "Optional FFmpeg source/include root for XMA2 decoding")
 set(MOJORECOMP_FFMPEG_LIBDIR "" CACHE PATH "Optional directory containing libavcodec.lib and mojorecomp-ffmpeg.dll")
@@ -581,7 +616,7 @@ if(MOJORECOMP_PPC_TARGET_TYPE STREQUAL "STATIC_LIBRARY")
     endif()
 endif()
 
-if(WIN32 AND EXISTS "${CLANG_BUILTINS}")
+if(CLANG_BUILTINS)
     target_link_libraries(MojoRecompSmoke PRIVATE "${CLANG_BUILTINS}")
 endif()
 
@@ -631,7 +666,7 @@ if(WIN32)
         mojorecomp_xex_image
         "${XENON_FMT}"
         "${XENON_XXHASH}"
-        "${CLANG_BUILTINS}"
+        ${CLANG_BUILTINS}
         onecore
         gdi32
         ws2_32
