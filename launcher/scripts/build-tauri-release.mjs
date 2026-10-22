@@ -34,7 +34,9 @@ const env = {
 };
 
 const tauri = resolve(launcherRoot, "node_modules/@tauri-apps/cli/tauri.js");
-const result = spawnSync(process.execPath, [tauri, "build", "--no-bundle"], {
+// Windows ships the portable executable itself; Linux ships an AppImage.
+const bundleArgs = isWindows ? ["--no-bundle"] : ["--bundles", "appimage"];
+const result = spawnSync(process.execPath, [tauri, "build", ...bundleArgs], {
   cwd: launcherRoot,
   env,
   stdio: "inherit",

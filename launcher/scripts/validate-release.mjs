@@ -138,6 +138,8 @@ const auditedArtworkHashes = new Map([
   ["public/art/mom-icon.png", "8e5486df7b69104b540453619ed478528ea7f1d352db9534ee0901112d277760"],
   ["public/art/mom-logo.png", "efd259f842f9d977cf082466bee7586b71d443f404b09b35b497c912ec0e526b"],
   ["src-tauri/icons/icon.ico", "517e97168a856f7a44ab93cae6717b1406db15481e8aec2e24c28fb168a9b8b7"],
+  // Byte-identical copy of the 256 px PNG entry inside icon.ico, used by Linux.
+  ["src-tauri/icons/icon.png", "85e2eaddb9f4e3908dae4daa32b20632b639e40f49f75a4087dc8c22fe96d7d3"],
 ]);
 for (const [relativePath, expectedHash] of auditedArtworkHashes) {
   const path = resolve(launcherRoot, relativePath);
@@ -149,8 +151,9 @@ for (const [relativePath, expectedHash] of auditedArtworkHashes) {
 }
 
 const configuredIcons = tauriConfig.bundle?.icon ?? [];
-if (configuredIcons.length !== 1 || configuredIcons[0] !== "icons/icon.ico") {
-  fail(`Expected audited Tauri icon configuration ["icons/icon.ico"], got: ${JSON.stringify(configuredIcons)}`);
+const expectedIcons = ["icons/icon.ico", "icons/icon.png"];
+if (JSON.stringify(configuredIcons) !== JSON.stringify(expectedIcons)) {
+  fail(`Expected audited Tauri icon configuration ${JSON.stringify(expectedIcons)}, got: ${JSON.stringify(configuredIcons)}`);
 }
 
 const appSource = await readFile(resolve(launcherRoot, "src/App.svelte"), "utf8");

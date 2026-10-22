@@ -12,6 +12,7 @@ deliberate validator update.
 | `mom-logo.png` | `EFD259F842F9D977CF082466BEE7586B71D443F404B09B35B497C912EC0E526B` | <https://cdn2.steamgriddb.com/logo/79d60d2defe0e8a228ed1fd7fab86e23.png> |
 | `mojorecomp.png` | `6FC57B409278FDE645B82374D8F5732690B130548FF82FDE3B9FD1611ACEC1D5` | Original MojoRecomp project artwork inspired by the Mojo iconography of the Crash Titans games; created independently for the project and selected by the project owner. |
 | `launcher/src-tauri/icons/icon.ico` | `517E97168A856F7A44AB93CAE6717B1406DB15481E8AEC2E24C28FB168A9B8B7` | Derived from `mojorecomp.png`. |
+| `launcher/src-tauri/icons/icon.png` | `85E2EADDB9F4E3908DAE4DAA32B20632B639E40F49F75A4087DC8C22FE96D7D3` | Byte-identical copy of the 256 px PNG entry inside `icon.ico`; used by the Linux window and AppImage. |
 
 The game logos and icons are third-party promotional artwork used only to identify
 user-owned games. They are not covered by the MojoRecomp ISC License. Their source

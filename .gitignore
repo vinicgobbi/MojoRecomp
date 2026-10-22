@@ -109,5 +109,7 @@ launcher/release/
 launcher/src-tauri/icons/android/
 launcher/src-tauri/icons/ios/
 launcher/src-tauri/icons/*.png
+# The AppImage icon is the 256 px image embedded in the approved icon.ico.
+!launcher/src-tauri/icons/icon.png
 launcher/src-tauri/icons/icon.icns
 
