@@ -155,11 +155,16 @@ fn acquire_profile_lock(game_root: &Path, profile: &str) -> Result<File, String>
         .write(true)
         .open(root.join(".localization.lock"))
         .map_err(|error| format!("Could not open localization lock file: {error}"))?;
-    fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| {
-        "Localization resources are being changed by another MojoRecomp Launcher instance"
-            .to_string()
-    })?;
-    Ok(lock)
+    // A child process forked by another thread briefly shares this lock's open
+    // file description on Unix, so a just-released lock can look held for a
+    // moment. Retry briefly before reporting a concurrent launcher instance.
+    for _ in 0..50 {
+        if fs2::FileExt::try_lock_exclusive(&lock).is_ok() {
+            return Ok(lock);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err("Localization resources are being changed by another MojoRecomp Launcher instance".into())
 }
 
 fn cleanup_stale_build_files(root: &Path) -> Result<(), String> {
