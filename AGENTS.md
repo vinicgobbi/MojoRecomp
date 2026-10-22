@@ -133,6 +133,10 @@ owned by another rights holder.
 - `.github/workflows/`: CI for commit message checks, release bumps, and the
   launcher release build.
 - `launcher/CHANGELOG.md`, `runtime/CHANGELOG-COT.md`: generated changelogs.
+- `docs/runtime-port/`: the native Windows/Linux runtime port plan, its work
+  packages and decisions, and the inventory of Windows dependencies. Update
+  the package status and inventory in the same change that advances a
+  package.
 
 Avoid adding planning diaries, migration reports, agent handoffs, or duplicate
 status Markdown files. Update `README.md` or this file only when the information
