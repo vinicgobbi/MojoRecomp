@@ -42,7 +42,7 @@ for marker in (
     if marker not in recompiler_text:
         raise RuntimeError(
             f"MojoRecomp Xenon runtime patch is incomplete ({marker} missing). "
-            "Run tools/apply-xenon-patches.bat first."
+            "Run tools/setup_toolchain.py first."
         )
 
 GENERATED.mkdir(parents=True, exist_ok=True)

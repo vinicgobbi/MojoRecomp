@@ -262,9 +262,10 @@ endif()
 set(MOJORECOMP_FFMPEG_ROOT "" CACHE PATH "Optional FFmpeg source/include root for XMA2 decoding")
 set(MOJORECOMP_FFMPEG_LIBDIR "" CACHE PATH "Optional directory containing libavcodec.lib and mojorecomp-ffmpeg.dll")
 
-# The previous ReXGlue bring-up proved this FFmpeg/XMA implementation. setup.bat
-# now rebuilds the same narrow source set from the pinned public FFmpeg fork/commit
-# through tools/ffmpeg-rexglue, removing the old opaque archived-library dependency.
+# The previous ReXGlue bring-up proved this FFmpeg/XMA implementation.
+# tools/setup_toolchain.py now rebuilds the same narrow source set from the
+# pinned public FFmpeg fork/commit through tools/ffmpeg-rexglue, removing the
+# old opaque archived-library dependency.
 set(MOJORECOMP_REXGLUE_FFMPEG_ROOT
     "${MOJORECOMP_ROOT}/thirdparty/FFmpeg")
 set(MOJORECOMP_REXGLUE_FFMPEG_LIBDIR
@@ -367,7 +368,7 @@ endif()
 file(READ "${XENOS_ROOT}/XenosRecomp/shader_common.h" MOJO_SHADER_COMMON_SOURCE)
 file(READ "${XENOS_ROOT}/XenosRecomp/shader_recompiler.cpp" MOJO_RECOMPILER_SOURCE)
 if(NOT MOJO_RECOMPILER_SOURCE MATCHES "MOJORECOMP_XENOS_BOOL_EXEC")
-    message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (boolean-exec support missing). Run tools/apply-xenos-patches.bat for this XENOS_ROOT.")
+    message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (boolean-exec support missing). Run tools/setup_toolchain.py apply-patch xenos <XENOS_ROOT>.")
 endif()
 foreach(MOJO_SHADER_COMMON_MARKER
         "g_TextureSampleScale"
@@ -376,7 +377,7 @@ foreach(MOJO_SHADER_COMMON_MARKER
         "g_LoopCount"
         "MojoQuantizeFloat24Depth")
     if(NOT MOJO_SHADER_COMMON_SOURCE MATCHES "${MOJO_SHADER_COMMON_MARKER}")
-        message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (${MOJO_SHADER_COMMON_MARKER} missing). Run tools/apply-xenos-patches.bat for this XENOS_ROOT.")
+        message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (${MOJO_SHADER_COMMON_MARKER} missing). Run tools/setup_toolchain.py apply-patch xenos <XENOS_ROOT>.")
     endif()
 endforeach()
 foreach(MOJO_RECOMPILER_MARKER
@@ -386,7 +387,7 @@ foreach(MOJO_RECOMPILER_MARKER
         "g_LoopCount"
         "SPEC_CONSTANT_ALPHA_FUNC_SHIFT")
     if(NOT MOJO_RECOMPILER_SOURCE MATCHES "${MOJO_RECOMPILER_MARKER}")
-        message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (${MOJO_RECOMPILER_MARKER} integration missing). Run tools/apply-xenos-patches.bat for this XENOS_ROOT.")
+        message(FATAL_ERROR "MojoRecomp Xenos runtime patch is incomplete (${MOJO_RECOMPILER_MARKER} integration missing). Run tools/setup_toolchain.py apply-patch xenos <XENOS_ROOT>.")
     endif()
 endforeach()
 file(READ "${XENOS_ROOT}/XenosRecomp/shader_common.h" MOJO_SHADER_COMMON_HEX HEX)

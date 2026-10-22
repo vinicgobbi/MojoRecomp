@@ -77,7 +77,7 @@ whose texts are preserved under `resources/licenses/`:
 ### FFmpeg libraries used by the COT runtime
 
 MojoRecomp no longer depends on the earlier opaque archived FFmpeg libraries for its
-public build path. `setup.bat` checks out the public `wmarti/FFmpeg` repository at
+public build path. `tools/setup_toolchain.py` checks out the public `wmarti/FFmpeg` repository at
 commit `0604b464c7cb4ebc94940cf1f324a3b26b87717c` and rebuilds the narrow Windows
 x86_64 library set through `tools/ffmpeg-rexglue/` into the ignored
 `thirdparty/build/FFmpeg/` directory. The selected libavcodec and libavutil objects

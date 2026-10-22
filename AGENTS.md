@@ -297,10 +297,19 @@ local `thirdparty/llvm22` toolchain.
 Python tools are invoked directly, for example `python3 tools/recompile.py`
 (`py -3 tools\recompile.py` on Windows).
 
+Recompilation toolchain setup (submodules, patched work trees, dependency
+builds; Windows needs Visual Studio with the x64 C++ tools and the local
+`thirdparty/llvm22` toolchain, Linux needs Clang, CMake, Ninja, and SDL's
+Linux build dependencies):
+
+```sh
+python3 tools/setup_toolchain.py
+python3 tools/setup_toolchain.py apply-patch xenos <checkout>
+```
+
 Legacy Windows-only entry points, kept until their native replacements land:
 
 ```bat
-setup.bat
 tools\analyze.bat
 tools\recompile.bat
 build-smoke.bat

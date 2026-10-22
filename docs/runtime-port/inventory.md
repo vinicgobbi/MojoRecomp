@@ -128,8 +128,8 @@ until RP-07. `tests/pm4_extent_probe.cpp` reserves its guest space with
 
 | Entry point | Role | Windows assumptions |
 | --- | --- | --- |
-| `setup.bat` | Checks submodules, copies them to `thirdparty/work`, applies patches, builds XenonRecomp, XenosRecomp, FFmpeg, SDL3, extract-xiso | Visual Studio `vcvars64.bat`, `C:\Program Files\CMake`, local `thirdparty/llvm22` clang-cl and lld-link, `robocopy` |
-| `tools/apply-*-patches.bat` | `git apply` of `patches/*.patch` into the work trees | None beyond batch syntax |
+| `setup.bat` -> `tools/setup_toolchain.py` | Checks submodules, copies them to `thirdparty/work`, applies patches, builds XenonRecomp, XenosRecomp, FFmpeg, SDL3, extract-xiso | Resolved by RP-03: Visual Studio located with `vswhere`, CMake and Ninja from `PATH`, `thirdparty/llvm22` overridable with `--llvm-root`; FFmpeg and extract-xiso skipped on Linux until RP-16 and RP-18 |
+| `tools/apply-*-patches.bat` -> `tools/setup_toolchain.py apply-patch` | `git apply` of `patches/*.patch` into the work trees | None beyond batch syntax |
 | `tools/analyze.bat` | Runs `XenonAnalyse.exe` on `game/default.xex` | `.exe` name |
 | `tools/recompile.bat` -> `tools/recompile.py` | Runs `XenonRecomp.exe`, writes `ppc/` | `.exe` name in `recompile.py` |
 | `build-smoke.bat` | Configures and builds the runtime with clang-cl, runs `MojoRecompSmoke.exe` | Visual Studio and CMake install paths |

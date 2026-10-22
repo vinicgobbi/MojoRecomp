@@ -5,7 +5,7 @@ This directory contains the narrow Windows x86_64 FFmpeg build used by the
 Crash of the Titans runtime for XMA/audio decoding.
 
 `thirdparty/FFmpeg` is a Git submodule pinned to commit
-`0604b464c7cb4ebc94940cf1f324a3b26b87717c`. `setup.bat` builds the selected
+`0604b464c7cb4ebc94940cf1f324a3b26b87717c`. `tools/setup_toolchain.py` builds the selected
 `libavcodec` and `libavutil` sources here with the repository's pinned Windows
 Clang/LLD toolchain. They are combined into the replaceable
 `mojorecomp-ffmpeg.dll`; no FFmpeg object code is linked into
