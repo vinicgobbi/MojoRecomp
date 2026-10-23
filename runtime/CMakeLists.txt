@@ -318,7 +318,7 @@ target_link_libraries(mojorecomp_xex_image PUBLIC mojorecomp_lzx)
 
 if(NOT EXISTS "${PPC_DIR}/ppc_func_mapping.cpp")
     message(FATAL_ERROR
-        "No XenonRecomp image in ${PPC_DIR}. Run tools/recompile.bat first.")
+        "No XenonRecomp image in ${PPC_DIR}. Run tools/recompile.py first.")
 endif()
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)

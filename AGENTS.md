@@ -307,11 +307,17 @@ python3 tools/setup_toolchain.py
 python3 tools/setup_toolchain.py apply-patch xenos <checkout>
 ```
 
+Switch-table analysis and recompilation (read `game/default.xex`, write
+`config/CrashOfTheTitans_switch_tables.toml` and the local `ppc/` output):
+
+```sh
+python3 tools/analyze.py
+python3 tools/recompile.py
+```
+
 Legacy Windows-only entry points, kept until their native replacements land:
 
 ```bat
-tools\analyze.bat
-tools\recompile.bat
 build-smoke.bat
 release.bat          (COT runtime release candidate)
 ```

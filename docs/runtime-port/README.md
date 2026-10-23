@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01, RP-02, and RP-03 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-04 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -48,7 +48,7 @@ the package section when a package changes state, and update
 | RP-01 | Configure and test the runtime without a guest image | 0 Foundations | - | in progress |
 | RP-02 | Portable CMake toolchain and presets | 0 Foundations | RP-01 | in progress |
 | RP-03 | Cross-platform setup entry point (replaces `setup.bat`) | 0 Foundations | RP-02 | in progress |
-| RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | todo |
+| RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | in progress |
 | RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | todo |
 | RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | todo |
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | todo |
@@ -62,7 +62,7 @@ the package section when a package changes state, and update
 | RP-15 | Portable on-screen text atlas | 2 Platform services | RP-05, D2 | todo |
 | RP-16 | FFmpeg and LZX shared libraries on Linux | 3 Native libraries | RP-03 | todo |
 | RP-17 | DXC on Linux | 3 Native libraries | RP-03, D3 | todo |
-| RP-18 | extract-xiso on Linux | 3 Native libraries | RP-03 | todo |
+| RP-18 | extract-xiso on Linux | 3 Native libraries | RP-03 | in progress |
 | RP-19 | Linux runtime executable and smoke build | 4 Integration | RP-04, RP-06 to RP-18 | todo |
 | RP-20 | Linux runtime release package | 4 Integration | RP-19 | todo |
 | RP-21 | Launcher and runtime integration on Linux | 4 Integration | RP-20 | todo |
@@ -96,9 +96,9 @@ tree copies, patch application, dependency builds) per the tooling policy.
 `setup.bat` then only forwards to it. The patch helpers
 (`tools/apply-*-patches.bat`) move into the same program.
 Done when: the new entry point reproduces `setup.bat` on Windows and builds
-XenonRecomp, XenosRecomp, and SDL3 on Linux. The FFmpeg and extract-xiso
-recipes are still Windows-only; the entry point skips them on Linux with a
-message until RP-16 and RP-18 port them. The Linux SDL3 build needs SDL's
+XenonRecomp, XenosRecomp, SDL3, and extract-xiso on Linux. The FFmpeg recipe
+is still Windows-only; the entry point skips it on Linux with a message until
+RP-16 ports it. The Linux SDL3 build needs SDL's
 system build dependencies (X11, Wayland, audio, udev development packages).
 
 **RP-04 Cross-platform analyze and recompile entry points.**
@@ -107,6 +107,11 @@ Python replacement for `tools/analyze.bat`. Verify that XenonRecomp output and
 the generated PPC code compile with Linux Clang.
 Done when: the owner can produce `ppc/` and the switch tables on Linux from
 their own game files, and the generated code compiles there.
+Linux status: `tools/analyze.py` reproduces the committed switch tables
+byte for byte (380 tables), `tools/recompile.py` generates `ppc/`, and all 79
+generated translation units compile with Clang 21 using the runtime's flags
+and no diagnostics. Remaining: run both through the forwarding batch files on
+Windows.
 
 ### Phase 1: Host layer
 
@@ -201,6 +206,10 @@ and provenance recorded (decision D3). The loader in
 
 **RP-18 extract-xiso on Linux.**
 Build the patched extract-xiso as an ELF tool for the runtime component.
+Linux status: the recipe builds upstream's `__LINUX__` configuration and the
+result lists and fully extracts the supported retail ISO. Remaining: confirm
+the Windows build is unchanged, and ship the tool in the Linux runtime
+package (RP-20).
 
 ### Phase 4: Integration
 

@@ -128,10 +128,10 @@ until RP-07. `tests/pm4_extent_probe.cpp` reserves its guest space with
 
 | Entry point | Role | Windows assumptions |
 | --- | --- | --- |
-| `setup.bat` -> `tools/setup_toolchain.py` | Checks submodules, copies them to `thirdparty/work`, applies patches, builds XenonRecomp, XenosRecomp, FFmpeg, SDL3, extract-xiso | Resolved by RP-03: Visual Studio located with `vswhere`, CMake and Ninja from `PATH`, `thirdparty/llvm22` overridable with `--llvm-root`; FFmpeg and extract-xiso skipped on Linux until RP-16 and RP-18 |
+| `setup.bat` -> `tools/setup_toolchain.py` | Checks submodules, copies them to `thirdparty/work`, applies patches, builds XenonRecomp, XenosRecomp, FFmpeg, SDL3, extract-xiso | Resolved by RP-03: Visual Studio located with `vswhere`, CMake and Ninja from `PATH`, `thirdparty/llvm22` overridable with `--llvm-root`; FFmpeg skipped on Linux until RP-16 |
 | `tools/apply-*-patches.bat` -> `tools/setup_toolchain.py apply-patch` | `git apply` of `patches/*.patch` into the work trees | None beyond batch syntax |
-| `tools/analyze.bat` | Runs `XenonAnalyse.exe` on `game/default.xex` | `.exe` name |
-| `tools/recompile.bat` -> `tools/recompile.py` | Runs `XenonRecomp.exe`, writes `ppc/` | `.exe` name in `recompile.py` |
+| `tools/analyze.bat` -> `tools/analyze.py` | Runs `XenonAnalyse` on `game/default.xex` | Resolved by RP-04: executable suffix chosen per platform |
+| `tools/recompile.bat` -> `tools/recompile.py` | Runs `XenonRecomp`, writes `ppc/` | Resolved by RP-04: executable suffix chosen per platform |
 | `build-smoke.bat` | Configures and builds the runtime with clang-cl, runs `MojoRecompSmoke.exe` | Visual Studio and CMake install paths |
 | `release.bat` | COT runtime release candidate | `tar.exe`, `npm.cmd`, Windows runtime artifacts |
 
@@ -145,9 +145,9 @@ the shader recompiler, and the extract-xiso patch removes FTP support.
 | --- | --- | --- | --- |
 | FFmpeg (LGPL, replaceable) | `mojorecomp-ffmpeg.dll` + import lib | `libmojorecomp-ffmpeg.so` | Built by `tools/ffmpeg-rexglue`; keep it dynamically linked and replaceable |
 | libmspack LZX (LGPL, replaceable) | `mojorecomp-lzx.dll` | `libmojorecomp-lzx.so` | Built by `tools/libmspack-lzx` |
-| DXC | `dxcompiler.dll`, `dxil.dll` (prebuilt, from XenosRecomp `dxc-bin`) | `libdxcompiler.so` | Linux build source and license provenance to decide (D3) |
+| DXC | `dxcompiler.dll`, `dxil.dll` (prebuilt, from XenosRecomp `dxc-bin`) | `libdxcompiler.so`, `libdxil.so` | The pinned `dxc-bin` already ships Linux x64 `libdxcompiler.so`, `libdxil.so`, and `dxc-linux` built from the same DXC commit as the Windows DLLs (`416fab6b`, 1.8.2407); license provenance still to record (D3) |
 | SDL3 | `SDL3-static.lib` | static `libSDL3.a` | Same pinned submodule |
-| extract-xiso | `extract-xiso.exe` | `extract-xiso` | Upstream supports Linux |
+| extract-xiso | `extract-xiso.exe` | `extract-xiso` | Built on Linux by `tools/extract-xiso` (RP-18) |
 | Vulkan loader | system `vulkan-1.dll` | system `libvulkan.so.1` | Not shipped |
 
 The launcher already expects the Linux runtime component to contain
@@ -158,15 +158,14 @@ confirmed by RP-20.
 
 ## Still to verify
 
+Verified since the survey: XenonRecomp, XenonAnalyse, XenosRecomp, SDL3, and
+extract-xiso build with Clang on Linux with the maintained patches (RP-03,
+RP-18); the generated PPC code compiles with Linux Clang (RP-04); and the
+pinned `dxc-bin` ships matching Linux binaries (see the table above).
+
 These need the pinned submodules or the game and could not be checked in the
 survey:
 
-- XenonRecomp, XenonAnalyse, and XenosRecomp build with Clang on Linux at the
-  pinned commits with the maintained patches applied.
-- The generated PPC code and `XenonUtils/ppc_context.h` compile with Linux
-  Clang (x86 intrinsics through SIMDe, no MSVC-only constructs).
-- Whether XenosRecomp's `dxc-bin` ships Linux binaries, and which DXC release
-  matches the pinned Windows binaries.
 - `tools/ffmpeg-rexglue` and `tools/libmspack-lzx` build shared libraries on
   Linux with the same exported surface.
 - `MojoRecompSmoke` builds on Linux. (The 16 game-independent tests build

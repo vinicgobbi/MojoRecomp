@@ -7,8 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
 XENON_WORK = ROOT / "thirdparty" / "work" / "XenonRecomp"
-RECOMP = ROOT / "thirdparty" / "build" / "XenonRecomp" / "XenonRecomp" / "XenonRecomp.exe"
+RECOMP = ROOT / "thirdparty" / "build" / "XenonRecomp" / "XenonRecomp" / f"XenonRecomp{EXE_SUFFIX}"
 CONFIG = ROOT / "config" / "CrashOfTheTitans.toml"
 CONTEXT = XENON_WORK / "XenonUtils" / "ppc_context.h"
 RECOMPILER_SOURCE = XENON_WORK / "XenonRecomp" / "recompiler.cpp"
@@ -85,4 +86,4 @@ if count != 1:
 generated_context.write_text(context_text, encoding="utf-8", newline="")
 files = [path for path in GENERATED.iterdir() if path.is_file()]
 total_bytes = sum(path.stat().st_size for path in files)
-print(f"Generated {len(files)} files ({total_bytes} bytes) in ppc\\")
+print(f"Generated {len(files)} files ({total_bytes} bytes) in {GENERATED}")
