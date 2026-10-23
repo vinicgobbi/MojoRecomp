@@ -25,7 +25,7 @@ on their contents are listed under [Still to verify](#still-to-verify).
 | On-screen text | GDI font rasterization | Open decision (see README) | Medium |
 | Guest memory write-watch | Vectored exception handler + `VirtualProtect` | `SIGSEGV` handler + `mprotect` | Medium, high risk |
 | Timing | Waitable timers | `clock_nanosleep` | Small |
-| Crash reporting | SEH, `MiniDumpWriteDump` | Signal handler; stub first | Medium |
+| Crash reporting | SEH, `MiniDumpWriteDump` | Signal handler with text log and JSON (RP-09) | Medium |
 | Threads | `SetThreadDescription`, `SetThreadPriority`, `GetCurrentThreadId` | `pthread_setname_np`, scheduling hints, `gettid` | Small |
 | Dynamic libraries | `LoadLibrary`/`GetProcAddress` | `dlopen`/`dlsym` | Small |
 | LGPL and tool binaries | `mojorecomp-ffmpeg.dll`, `mojorecomp-lzx.dll`, `extract-xiso.exe` | `.so` with `$ORIGIN` rpath, ELF tool | Medium |
@@ -54,7 +54,7 @@ Xbox API and are platform-neutral.
 | `host/timing.cpp` | 99 | High-resolution waitable timer | Linux uses `clock_nanosleep` with `CLOCK_MONOTONIC` (RP-06) |
 | `host/host_paths.cpp` | 26 | `GetModuleFileNameW`; falls back to the current directory | Resolved by RP-05: `host::ExecutablePath()` (`/proc/self/exe` on Linux) |
 | `host/system_font_atlas.cpp` | 94 | GDI: `CreateFontW`, `CreateDIBSection`, `TextOutW` | Open decision D2 (RP-15) |
-| `host/crash_reporter_windows.cpp` | 522 | SEH (`__try`/`__except`), `SetUnhandledExceptionFilter`, `MiniDumpWriteDump` | `host/crash_reporter_stub.cpp` first, signal handler later (RP-09) |
+| `host/crash_reporter_windows.cpp` | 525 | SEH (`__try`/`__except`), `SetUnhandledExceptionFilter`, `MiniDumpWriteDump` | Resolved by RP-09: `host/crash_reporter_posix.cpp` (signal handler, text log and JSON, decision D4); stays Windows-only |
 | `debug_mode.cpp` | 395 | `GetAsyncKeyState(VK_F1..VK_F10)`, `GetForegroundWindow` | SDL3 keyboard state and window focus (RP-13) |
 | `boot_probe.cpp` | 1024 | Runtime entry point: window placement, `GetModuleFileNameW`, process waits, `EXCEPTION_ACCESS_VIOLATION` reporting | Split host-specific parts into the host layer (RP-19) |
 

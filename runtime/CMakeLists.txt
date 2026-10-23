@@ -19,10 +19,16 @@ if(WIN32)
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_windows.cpp)
     set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_windows.cpp)
     set(MOJORECOMP_HOST_FIBER_SOURCE host/fiber_windows.cpp)
+    set(MOJORECOMP_HOST_CRASH_REPORTER_SOURCES host/crash_reporter_windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_posix.cpp)
     set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_posix.cpp)
     set(MOJORECOMP_HOST_FIBER_SOURCE host/fiber_posix.cpp)
+    # The guest half reads the translated image's context, so it is only
+    # linked into runtime executables; tests provide their own.
+    set(MOJORECOMP_HOST_CRASH_REPORTER_SOURCES
+        host/crash_reporter_posix.cpp
+        host/crash_report_guest.cpp)
 else()
     message(FATAL_ERROR "MojoRecomp runtime supports Windows and Linux hosts only")
 endif()
@@ -227,6 +233,17 @@ if(BUILD_TESTING)
     target_link_libraries(MojoRecompHostFiberTest PRIVATE Threads::Threads)
     add_test(NAME HostFiber COMMAND MojoRecompHostFiberTest)
     set_tests_properties(HostFiber PROPERTIES TIMEOUT 10 LABELS "host;cpu")
+    if(NOT WIN32)
+        # The Windows reporter is covered by RuntimeCrashDump, which needs the
+        # runtime executable.
+        add_executable(MojoRecompCrashReporterTest
+            tests/crash_reporter_test.cpp
+            host/crash_reporter_posix.cpp
+            ${MOJORECOMP_HOST_PLATFORM_SOURCE})
+        target_link_libraries(MojoRecompCrashReporterTest PRIVATE ${MOJORECOMP_HOST_PLATFORM_LIBS})
+        add_test(NAME CrashReporter COMMAND MojoRecompCrashReporterTest)
+        set_tests_properties(CrashReporter PROPERTIES TIMEOUT 30 LABELS "host;logging;crash")
+    endif()
     add_executable(MojoRecompTimeFieldsTest tests/time_fields_test.cpp)
     add_test(NAME TimeFields COMMAND MojoRecompTimeFieldsTest)
     set_tests_properties(TimeFields PROPERTIES TIMEOUT 10 LABELS "kernel")
@@ -668,7 +685,7 @@ endif()
 if(WIN32)
     add_executable(MojoRecompBootProbe
         boot_probe.cpp
-        host/crash_reporter_windows.cpp
+        ${MOJORECOMP_HOST_CRASH_REPORTER_SOURCES}
         tests/fiber_probe.cpp
         tests/event_probe.cpp
         ${MOJORECOMP_KERNEL_SOURCES}

@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-08 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-09 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -53,7 +53,7 @@ the package section when a package changes state, and update
 | RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | in progress |
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | in progress |
 | RP-08 | Portable guest fibers | 1 Host layer | RP-05 | in progress |
-| RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | todo |
+| RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | in progress |
 | RP-10 | SDL3 as a required dependency on both hosts | 2 Platform services | RP-03 | todo |
 | RP-11 | SDL3 window | 2 Platform services | RP-10 | todo |
 | RP-12 | Vulkan surface and loader through SDL3 | 2 Platform services | RP-11 | todo |
@@ -198,6 +198,27 @@ reporter that writes the same support information the launcher collects
 (minidump equivalent to be decided).
 Done when: a Linux crash leaves a diagnosable record the support package can
 include.
+Status (decision D4): `host/crash_reporter_posix.cpp` handles `SIGSEGV`,
+`SIGBUS`, `SIGILL`, `SIGFPE`, `SIGABRT`, and `SIGTRAP` on an alternate signal
+stack and writes the same `crash-<time>-pid<pid>.log` and `.json` pair as
+Windows, which the launcher's support package already collects; the JSON keeps
+schema version 1 with `exception_code` set to the signal name, adds `signal`
+and `signal_code`, and reports `dump_created: false`. The log has the host
+registers, the faulting module and its base-relative offset (from
+`/proc/self/maps`, so libraries loaded later are named too), the last Vulkan
+failure, a stack scan, and a `backtrace` with module offsets. Guest details
+(last indirect call, PPC registers) come from `host/crash_report_guest.cpp`
+and are read through `process_vm_readv`, so a corrupt context cannot fault
+inside the handler. After the report the original signal is passed on, so the
+process still dies with it. The reporter refuses to replace an existing
+`SIGSEGV` handler: it is installed first and the RP-07 write-fault handler
+chains to it. Guest threads call `PrepareCurrentThreadForCrashReports` so stack
+overflows are reported too. The game-independent `CrashReporter` test covers
+a null read, `abort`, a stack overflow on another thread, chaining behind the
+write-fault handler, and the refusal, and passes on Linux. Remaining: install
+the reporter in the Linux runtime executable (RP-19) and check a real crash
+through the launcher's support package (RP-21); Windows only gained a no-op
+`PrepareCurrentThreadForCrashReports` and needs a build check.
 
 ### Phase 2: Platform services
 
@@ -280,7 +301,6 @@ regression pass. Linux must not be described as supported until this passes.
 | --- | --- | --- | --- |
 | D2 | On-screen text without GDI | Bundled font with stb_truetype (needs font license review), or system fonts through fontconfig and FreeType | RP-15 |
 | D3 | DXC for Linux | Official DXC Linux release matching the Windows binaries, or building DXC from source | RP-17 |
-| D4 | Linux crash dumps | Signal handler with backtrace text, or a minidump library | RP-09 |
 | D5 | Minimum Linux baseline | glibc version and distributions to support, matching the launcher AppImage | RP-19 |
 
 Record each decision here, with the reason, when it is made.
@@ -290,3 +310,4 @@ Record each decision here, with the reason, when it is made.
 | ID | Decision | Reason |
 | --- | --- | --- |
 | D1 | Host fiber abstraction: Win32 fibers stay on Windows, `ucontext` on Linux; an assembly switch only for Linux if in-game switch counts make the ~210 ns `swapcontext` cost matter | Keeps Windows free of regression risk: the TEB stack limits, guard pages, `__chkstk`, SEH, and the crash reporter all depend on native fibers. glibc's `swapcontext` already saves and restores MXCSR and the x87 control word, matching `FIBER_FLAG_FLOAT_SWITCH`. |
+| D4 | Linux crash reports: a signal handler writes the Windows-compatible text log and JSON sidecar with a backtrace; no minidump | No new dependency and no launcher change, since the support package already treats the `.dmp` as optional; a minidump library (Breakpad) can be reconsidered if text reports prove insufficient |

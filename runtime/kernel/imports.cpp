@@ -26,6 +26,7 @@
 #include "../config/runtime_config.h"
 #include "../cpu/timebase.h"
 #include "../cpu/guest_thread.h"
+#include "../host/crash_reporter.h"
 #include "../host/timing.h"
 #include "../host/platform.h"
 #include "../cpu/guest_fiber.h"
@@ -1362,6 +1363,7 @@ struct ThreadObject final : KernelObject, std::enable_shared_from_this<ThreadObj
     {
         auto self = shared_from_this();
         hostThread = std::thread([self] {
+            mojorecomp::host::PrepareCurrentThreadForCrashReports();
             {
                 std::unique_lock lock(self->mutex);
                 self->cv.wait(lock, [&] { return !self->suspended; });

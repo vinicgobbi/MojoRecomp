@@ -486,6 +486,8 @@ void ShutdownCrashReporter()
     SetUnhandledExceptionFilter(nullptr);
 }
 
+void PrepareCurrentThreadForCrashReports() {}
+
 void RecordVulkanFailure(const char* call, int32_t result,
                          const char* resultName, uint64_t frame,
                          uint64_t sequence, const char* stage) noexcept
@@ -510,6 +512,7 @@ namespace mojorecomp::host {
 
 bool InitializeCrashReporter(const CrashReporterConfig&) { return false; }
 void ShutdownCrashReporter() {}
+void PrepareCurrentThreadForCrashReports() {}
 std::filesystem::path CrashReportDirectoryForConfig(const std::filesystem::path& configPath)
 {
     return configPath.parent_path() / "logs";

@@ -4,6 +4,7 @@ namespace mojorecomp::host {
 
 bool InitializeCrashReporter(const CrashReporterConfig&) { return false; }
 void ShutdownCrashReporter() {}
+void PrepareCurrentThreadForCrashReports() {}
 std::filesystem::path CrashReportDirectoryForConfig(const std::filesystem::path& configPath)
 {
     return configPath.parent_path() / "logs";
