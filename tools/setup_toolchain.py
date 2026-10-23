@@ -107,7 +107,6 @@ COMPONENTS = (
         ROOT / "tools" / "extract-xiso",
         BUILD / "extract-xiso",
         (f"-DEXTRACT_XISO_ROOT:PATH={(WORK / 'extract-xiso').as_posix()}",),
-        linux_pending="RP-18",
     ),
 )
 
