@@ -4,6 +4,7 @@
 // implementation file (platform_windows.cpp or platform_posix.cpp), selected by
 // CMake, so callers never branch on the operating system themselves.
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -48,6 +49,27 @@ bool SyncFileToStorage(std::FILE* file);
 // File name of a shared library for this host, for example "dxcompiler" ->
 // "dxcompiler.dll" on Windows and "libdxcompiler.so" on Linux.
 std::string SharedLibraryFileName(std::string_view baseName);
+
+enum class PageAccess
+{
+    ReadOnly,
+    ReadWrite,
+};
+
+// Changes the protection of the whole pages in [address, address + bytes).
+// Safe to call from a WriteFaultHandler.
+bool SetPageAccess(void* address, size_t bytes, PageAccess access) noexcept;
+
+// Called when a thread writes to a read-only page. It runs in exception or
+// signal context, so it may only use lock-free atomics and SetPageAccess.
+// Returning true means the page is writable again and the write is retried;
+// false passes the fault on to the next handler.
+using WriteFaultHandler = bool (*)(uintptr_t faultAddress) noexcept;
+
+// Installs the process-wide write fault handler ahead of other handlers.
+// Only one handler can be installed at a time.
+bool InstallWriteFaultHandler(WriteFaultHandler handler);
+void RemoveWriteFaultHandler();
 
 // Recursive lock backing guest critical sections. Windows uses a native
 // CRITICAL_SECTION with a spin count (MOJORECOMP_CS_NATIVE=0 selects

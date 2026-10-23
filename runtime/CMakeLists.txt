@@ -17,8 +17,10 @@ option(MOJORECOMP_GUEST_IMAGE
 # Host OS primitives (host/platform.h) have one implementation per host.
 if(WIN32)
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_windows.cpp)
+    set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_posix.cpp)
+    set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_posix.cpp)
 else()
     message(FATAL_ERROR "MojoRecomp runtime supports Windows and Linux hosts only")
 endif()
@@ -165,7 +167,10 @@ if(BUILD_TESTING)
     set_tests_properties(GpuExecutor PROPERTIES TIMEOUT 10 LABELS "gpu;performance")
     add_executable(MojoRecompGuestMemorySnapshotTest
         tests/guest_memory_snapshot_test.cpp
-        gpu/guest_memory_snapshot.cpp)
+        gpu/guest_memory_snapshot.cpp
+        ${MOJORECOMP_HOST_PLATFORM_SOURCE}
+        ${MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE})
+    target_link_libraries(MojoRecompGuestMemorySnapshotTest PRIVATE ${MOJORECOMP_HOST_PLATFORM_LIBS})
     if(WIN32)
         target_link_libraries(MojoRecompGuestMemorySnapshotTest PRIVATE onecore)
     endif()
@@ -468,6 +473,7 @@ set(MOJORECOMP_KERNEL_SOURCES
     config/runtime_config.cpp
     debug_mode.cpp
     gpu/hardware_probe.cpp
+    ${MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE}
     kernel/memory.cpp
     kernel/heap.cpp
     kernel/klog.cpp

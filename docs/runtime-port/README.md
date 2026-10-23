@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-06 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-07 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -51,7 +51,7 @@ the package section when a package changes state, and update
 | RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | in progress |
 | RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | in progress |
 | RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | in progress |
-| RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | todo |
+| RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | in progress |
 | RP-08 | Portable guest fibers | 1 Host layer | RP-05 | todo |
 | RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | todo |
 | RP-10 | SDL3 as a required dependency on both hosts | 2 Platform services | RP-03 | todo |
@@ -160,6 +160,19 @@ tracking in `gpu/guest_memory_snapshot.cpp` from a vectored exception handler
 with `VirtualProtect` to a `SIGSEGV` handler with `mprotect`, keeping the
 handler async-signal-safe.
 Done when: `GuestMemorySnapshot` and a mapping probe pass on both hosts.
+Status: the guest address space with its physical aliases is reserved by
+`host/guest_address_space_{windows,posix}.cpp` (the Windows code moved
+unchanged from `kernel/memory.cpp`). Page protection and the write-fault hook
+are host primitives: a vectored handler with `VirtualProtect` on Windows, and
+on Linux a `SIGSEGV` handler that accepts only `SEGV_ACCERR` write faults,
+calls `mprotect`, and forwards every other fault to the previous handler (an
+unclaimed fault still terminates the process). `gpu/guest_memory_snapshot.cpp`
+has no OS code left, so Linux now uses the same tracked range cache as
+Windows. `GuestMemorySnapshot` reserves the production layout through the host
+layer and checks aliasing, cache hits, invalidation by alias writes, writes
+from other threads, and restoration on shutdown; it passes on Linux.
+Remaining: the Windows run of the updated test, and the in-game Windows
+check.
 
 **RP-08 Portable guest fibers.**
 Replace `ConvertThreadToFiberEx`/`SwitchToFiber` in `cpu/guest_fiber.cpp` with

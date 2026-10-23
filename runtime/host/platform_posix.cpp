@@ -2,10 +2,13 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <signal.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <mutex>
 #include <system_error>
 #include <utility>
@@ -67,6 +70,93 @@ bool ResizeFile(std::FILE* file, int64_t size)
 bool SyncFileToStorage(std::FILE* file)
 {
     return fsync(fileno(file)) == 0;
+}
+
+bool SetPageAccess(void* address, size_t bytes, PageAccess access) noexcept
+{
+    const int protection =
+        access == PageAccess::ReadOnly ? PROT_READ : PROT_READ | PROT_WRITE;
+    return mprotect(address, bytes, protection) == 0;
+}
+
+namespace {
+
+std::atomic<WriteFaultHandler> g_writeFaultHandler{nullptr};
+struct sigaction g_previousSegvAction{};
+bool g_segvHandlerInstalled = false;
+
+bool IsWriteFault(void* context) noexcept
+{
+#if defined(__x86_64__)
+    // Bit 1 of the x86 page-fault error code is set for writes.
+    const auto* ucontext = static_cast<const ucontext_t*>(context);
+    return (ucontext->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+#else
+#error "Write fault detection is implemented for x86-64 Linux only"
+#endif
+}
+
+void ForwardToPreviousHandler(int signal, siginfo_t* info, void* context) noexcept
+{
+    const struct sigaction& previous = g_previousSegvAction;
+    if ((previous.sa_flags & SA_SIGINFO) && previous.sa_sigaction)
+    {
+        previous.sa_sigaction(signal, info, context);
+        return;
+    }
+    if (previous.sa_handler != SIG_DFL && previous.sa_handler != SIG_IGN)
+    {
+        previous.sa_handler(signal);
+        return;
+    }
+    // Restore the default action; returning re-executes the faulting
+    // instruction, which then terminates the process as an unhandled fault.
+    struct sigaction defaultAction{};
+    defaultAction.sa_handler = SIG_DFL;
+    sigemptyset(&defaultAction.sa_mask);
+    sigaction(signal, &defaultAction, nullptr);
+}
+
+void SegvHandler(int signal, siginfo_t* info, void* context)
+{
+    const WriteFaultHandler handler = g_writeFaultHandler.load(std::memory_order_acquire);
+    if (handler && info && info->si_code == SEGV_ACCERR && IsWriteFault(context) &&
+        handler(reinterpret_cast<uintptr_t>(info->si_addr)))
+        return;
+    ForwardToPreviousHandler(signal, info, context);
+}
+
+} // namespace
+
+bool InstallWriteFaultHandler(WriteFaultHandler handler)
+{
+    if (!handler)
+        return false;
+    if (g_segvHandlerInstalled)
+        return g_writeFaultHandler.load(std::memory_order_acquire) == handler;
+
+    g_writeFaultHandler.store(handler, std::memory_order_release);
+    struct sigaction action{};
+    action.sa_sigaction = SegvHandler;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGSEGV, &action, &g_previousSegvAction) != 0)
+    {
+        g_writeFaultHandler.store(nullptr, std::memory_order_release);
+        return false;
+    }
+    g_segvHandlerInstalled = true;
+    return true;
+}
+
+void RemoveWriteFaultHandler()
+{
+    if (g_segvHandlerInstalled)
+    {
+        sigaction(SIGSEGV, &g_previousSegvAction, nullptr);
+        g_segvHandlerInstalled = false;
+    }
+    g_writeFaultHandler.store(nullptr, std::memory_order_release);
 }
 
 struct RecursiveLock::Impl

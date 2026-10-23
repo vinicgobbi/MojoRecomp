@@ -64,7 +64,7 @@ Xbox API and are platform-neutral.
 | --- | ---: | --- | --- |
 | `cpu/guest_fiber.cpp` | 152 | `ConvertThreadToFiberEx(FIBER_FLAG_FLOAT_SWITCH)`, `CreateFiber`, `SwitchToFiber`, `IsThreadAFiber` | Portable context switch that also saves FP/SSE control state (RP-08) |
 | `cpu/timebase.cpp` | 145 | One `_MSC_VER` branch, in the ARM64 path only | None: x86-64 already uses `__builtin_ia32_rdtsc` and ARM64 is out of scope |
-| `kernel/memory.cpp` | 154 | `VirtualAlloc`/`VirtualFree` and file mappings; POSIX `mmap` branch exists | Verify and test the existing POSIX branch (RP-07) |
+| `kernel/memory.cpp` | 154 | None | Resolved by RP-07: reservation moved to `host/guest_address_space_*.cpp` and covered by `GuestMemorySnapshot` |
 | `kernel/imports.cpp` | 4752 | None; compiles on Linux | Resolved by RP-05 and RP-06: host thread id, file helpers, and `host::RecursiveLock`; calendar conversion in `kernel/time_fields.h` |
 | `title_resources.cpp` | 39 | `_fseeki64`/`_ftelli64` | Resolved by RP-05: host 64-bit file helpers |
 
@@ -75,7 +75,7 @@ Xbox API and are platform-neutral.
 | `gpu/vk_presenter.cpp` | 14897 | `vkCreateWin32SurfaceKHR`, loads `vulkan-1.dll`, `HWND`, `GetAsyncKeyState(VK_F12)`, BMP structs for screenshots | SDL3 surface and Vulkan loader (RP-12); thread id and priority moved to the host layer (RP-05) |
 | `gpu/hardware_probe.cpp` | 330 | Win32 surface and loader for the launcher hardware probe | Same as above (RP-12) |
 | `gpu/shader_translator.cpp` | 1399 | COM base headers for `dxcapi.h` | DXC loading moved to `host::DynamicLibrary` (RP-05); compiles on Linux with `__EMULATE_UUID`; verify with a Linux `libdxcompiler.so` (RP-17) |
-| `gpu/guest_memory_snapshot.cpp` | 561 | `AddVectoredExceptionHandler` + `VirtualProtect` write tracking | `SIGSEGV` handler + `mprotect` (RP-07) |
+| `gpu/guest_memory_snapshot.cpp` | 561 | None | Resolved by RP-07: host `SetPageAccess` and write-fault handler (`SIGSEGV` + `mprotect` on Linux) |
 | `gpu/gpu_executor.cpp`, `gpu/vd.cpp` | 1244 | None | Resolved by RP-05: host thread naming and id; both compile on Linux |
 
 ### Audio
@@ -88,12 +88,11 @@ Xbox API and are platform-neutral.
 ### Tests
 
 `tests/window_mode_test.cpp`, `tests/texture_gpu_probe.cpp`,
-`tests/guest_memory_snapshot_test.cpp`, `tests/event_probe.cpp`, and
-`tests/input_probe.cpp` use Win32 directly or link Windows libraries. They
-move with the code they test. `tests/guest_memory_snapshot_test.cpp` already
-builds and passes on Linux, but its write-watch checks only run on Windows
-until RP-07. `tests/pm4_extent_probe.cpp` reserves its guest space with
-`mmap` on Linux (RP-01).
+`tests/event_probe.cpp`, and `tests/input_probe.cpp` use Win32 directly or
+link Windows libraries. They move with the code they test.
+`tests/guest_memory_snapshot_test.cpp` runs its write-watch checks on both
+hosts through the host layer (RP-07). `tests/pm4_extent_probe.cpp` reserves
+its guest space with `mmap` on Linux (RP-01).
 
 ## Build system
 

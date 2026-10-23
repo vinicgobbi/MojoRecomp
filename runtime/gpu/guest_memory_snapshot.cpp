@@ -10,11 +10,7 @@
 #include <thread>
 #include <unordered_map>
 
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
+#include "../host/platform.h"
 
 namespace mojorecomp::gpu {
 namespace {
@@ -71,24 +67,23 @@ std::atomic<uint64_t> g_cacheMisses{0};
 std::atomic<uint64_t> g_missingReads{0};
 std::atomic<uint64_t> g_nextIdentity{1};
 
-#if defined(_WIN32)
-PVOID g_vectoredHandler = nullptr;
+using mojorecomp::host::PageAccess;
+
+bool g_writeFaultHandlerInstalled = false;
 
 bool SetAliasPageProtection(uintptr_t base, size_t firstPage, size_t lastPage,
-                            DWORD protection) noexcept
+                            PageAccess access) noexcept
 {
-    const SIZE_T span = SIZE_T(lastPage - firstPage + 1u) * kPageBytes;
+    const size_t span = size_t(lastPage - firstPage + 1u) * kPageBytes;
     bool ok = true;
     for (uint32_t view : kGuestMemoryPhysicalViews)
     {
-        DWORD oldProtection = 0;
         void* host = reinterpret_cast<void*>(
             base + view + (uintptr_t(firstPage) << kPageShift));
-        ok = VirtualProtect(host, span, protection, &oldProtection) != FALSE && ok;
+        ok = mojorecomp::host::SetPageAccess(host, span, access) && ok;
     }
     return ok;
 }
-#endif
 
 thread_local const GuestMemorySnapshot* g_activeSnapshot = nullptr;
 thread_local bool g_activeSnapshotReadFailed = false;
@@ -111,20 +106,13 @@ size_t LastPage(uint32_t address, uint64_t bytes) noexcept
     return size_t((uint64_t(address) - kTrackedGuestBase + bytes - 1u) >> kPageShift);
 }
 
-#if defined(_WIN32)
-LONG CALLBACK SnapshotWriteFaultHandler(EXCEPTION_POINTERS* exceptionInfo)
+// Runs in exception or signal context: lock-free atomics and page protection
+// changes only.
+bool SnapshotWriteFaultHandler(uintptr_t fault) noexcept
 {
-    if (!exceptionInfo || !exceptionInfo->ExceptionRecord ||
-        exceptionInfo->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
-        exceptionInfo->ExceptionRecord->NumberParameters < 2 ||
-        exceptionInfo->ExceptionRecord->ExceptionInformation[0] != 1)
-        return EXCEPTION_CONTINUE_SEARCH;
-
     const uintptr_t base = g_guestBase.load(std::memory_order_acquire);
     if (!base)
-        return EXCEPTION_CONTINUE_SEARCH;
-    const uintptr_t fault = static_cast<uintptr_t>(
-        exceptionInfo->ExceptionRecord->ExceptionInformation[1]);
+        return false;
     size_t page = kPageCount;
     for (uint32_t view : kGuestMemoryPhysicalViews)
     {
@@ -137,17 +125,17 @@ LONG CALLBACK SnapshotWriteFaultHandler(EXCEPTION_POINTERS* exceptionInfo)
         }
     }
     if (page >= kPageCount)
-        return EXCEPTION_CONTINUE_SEARCH;
+        return false;
 
     if (!g_pageTouched[page].load(std::memory_order_acquire))
-        return EXCEPTION_CONTINUE_SEARCH;
+        return false;
 
     g_pageState[page].store(3, std::memory_order_release);
     g_pageGeneration[page].fetch_add(1, std::memory_order_acq_rel);
-    if (!SetAliasPageProtection(base, page, page, PAGE_READWRITE))
-        return EXCEPTION_CONTINUE_SEARCH;
+    if (!SetAliasPageProtection(base, page, page, PageAccess::ReadWrite))
+        return false;
     g_pageState[page].store(0, std::memory_order_release);
-    return EXCEPTION_CONTINUE_EXECUTION;
+    return true;
 }
 
 bool EnsureTrackingBase(const uint8_t* guestBase)
@@ -156,15 +144,15 @@ bool EnsureTrackingBase(const uint8_t* guestBase)
         return false;
     const uintptr_t wanted = reinterpret_cast<uintptr_t>(guestBase);
     const uintptr_t current = g_guestBase.load(std::memory_order_acquire);
-    if (current == wanted && g_vectoredHandler)
+    if (current == wanted && g_writeFaultHandlerInstalled)
         return true;
     if (current && current != wanted)
         return false;
-    if (!g_vectoredHandler)
+    if (!g_writeFaultHandlerInstalled)
     {
-        g_vectoredHandler = AddVectoredExceptionHandler(1, SnapshotWriteFaultHandler);
-        if (!g_vectoredHandler)
+        if (!mojorecomp::host::InstallWriteFaultHandler(SnapshotWriteFaultHandler))
             return false;
+        g_writeFaultHandlerInstalled = true;
     }
     g_guestBase.store(wanted, std::memory_order_release);
     return true;
@@ -206,9 +194,9 @@ bool ProtectTrackedPages(const uint8_t* guestBase, size_t firstPage, size_t last
             g_pageTouched[runEnd].store(1, std::memory_order_release);
         }
 
-        if (!SetAliasPageProtection(base, runBegin, runEnd, PAGE_READONLY))
+        if (!SetAliasPageProtection(base, runBegin, runEnd, PageAccess::ReadOnly))
         {
-            SetAliasPageProtection(base, runBegin, runEnd, PAGE_READWRITE);
+            SetAliasPageProtection(base, runBegin, runEnd, PageAccess::ReadWrite);
             for (size_t i = runBegin; i <= runEnd; ++i)
                 g_pageState[i].store(0, std::memory_order_release);
             return false;
@@ -228,7 +216,6 @@ bool ProtectTrackedPages(const uint8_t* guestBase, size_t firstPage, size_t last
             return ProtectTrackedPages(guestBase, firstPage, lastPage);
     return true;
 }
-#endif
 
 std::vector<uint64_t> ReadGenerations(size_t firstPage, size_t lastPage)
 {
@@ -294,7 +281,6 @@ bool GuestMemorySnapshot::Capture(const uint8_t* guestBase, uint32_t address, ui
     uint64_t identity = 0;
     if (TrackedRange(address, bytes))
     {
-#if defined(_WIN32)
         std::lock_guard<std::mutex> lock(g_cacheMutex);
         if (!EnsureTrackingBase(guestBase))
             return false;
@@ -352,12 +338,6 @@ bool GuestMemorySnapshot::Capture(const uint8_t* guestBase, uint32_t address, ui
             g_cacheMisses.fetch_add(1, std::memory_order_relaxed);
             break;
         }
-#else
-        auto data = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(bytes));
-        std::memcpy(data->data(), guestBase + address, static_cast<size_t>(bytes));
-        captured = std::move(data);
-        identity = g_nextIdentity.fetch_add(1, std::memory_order_relaxed);
-#endif
     }
     else
     {
@@ -520,7 +500,6 @@ uint64_t GuestSnapshotMissingReadCount() noexcept
 void GuestSnapshotCacheShutdown()
 {
     std::lock_guard<std::mutex> lock(g_cacheMutex);
-#if defined(_WIN32)
     const uintptr_t base = g_guestBase.load(std::memory_order_acquire);
     if (base)
     {
@@ -537,7 +516,7 @@ void GuestSnapshotCacheShutdown()
                    g_pageTouched[page + 1u].load(std::memory_order_acquire))
                 ++page;
             const size_t runEnd = page;
-            SetAliasPageProtection(base, runBegin, runEnd, PAGE_READWRITE);
+            SetAliasPageProtection(base, runBegin, runEnd, PageAccess::ReadWrite);
             for (size_t i = runBegin; i <= runEnd; ++i)
             {
                 g_pageState[i].store(0, std::memory_order_relaxed);
@@ -547,12 +526,11 @@ void GuestSnapshotCacheShutdown()
             ++page;
         }
     }
-    if (g_vectoredHandler)
+    if (g_writeFaultHandlerInstalled)
     {
-        RemoveVectoredExceptionHandler(g_vectoredHandler);
-        g_vectoredHandler = nullptr;
+        mojorecomp::host::RemoveWriteFaultHandler();
+        g_writeFaultHandlerInstalled = false;
     }
-#endif
     g_guestBase.store(0, std::memory_order_release);
     g_rangeCache.clear();
     g_rangeCacheLru.clear();

@@ -7,6 +7,7 @@
 #include <io.h>
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -62,6 +63,58 @@ bool ResizeFile(std::FILE* file, int64_t size)
 bool SyncFileToStorage(std::FILE* file)
 {
     return _commit(_fileno(file)) == 0;
+}
+
+bool SetPageAccess(void* address, size_t bytes, PageAccess access) noexcept
+{
+    const DWORD protection =
+        access == PageAccess::ReadOnly ? PAGE_READONLY : PAGE_READWRITE;
+    DWORD previous = 0;
+    return VirtualProtect(address, bytes, protection, &previous) != FALSE;
+}
+
+namespace {
+
+std::atomic<WriteFaultHandler> g_writeFaultHandler{nullptr};
+PVOID g_vectoredHandler = nullptr;
+
+LONG CALLBACK VectoredWriteFaultHandler(EXCEPTION_POINTERS* exceptionInfo)
+{
+    const EXCEPTION_RECORD* record = exceptionInfo ? exceptionInfo->ExceptionRecord : nullptr;
+    // ExceptionInformation[0] == 1 marks a write access.
+    if (!record || record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION ||
+        record->NumberParameters < 2 || record->ExceptionInformation[0] != 1)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    const WriteFaultHandler handler = g_writeFaultHandler.load(std::memory_order_acquire);
+    if (handler && handler(static_cast<uintptr_t>(record->ExceptionInformation[1])))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+} // namespace
+
+bool InstallWriteFaultHandler(WriteFaultHandler handler)
+{
+    if (!handler)
+        return false;
+    if (g_vectoredHandler)
+        return g_writeFaultHandler.load(std::memory_order_acquire) == handler;
+    g_writeFaultHandler.store(handler, std::memory_order_release);
+    g_vectoredHandler = AddVectoredExceptionHandler(1, VectoredWriteFaultHandler);
+    if (!g_vectoredHandler)
+        g_writeFaultHandler.store(nullptr, std::memory_order_release);
+    return g_vectoredHandler != nullptr;
+}
+
+void RemoveWriteFaultHandler()
+{
+    if (g_vectoredHandler)
+    {
+        RemoveVectoredExceptionHandler(g_vectoredHandler);
+        g_vectoredHandler = nullptr;
+    }
+    g_writeFaultHandler.store(nullptr, std::memory_order_release);
 }
 
 namespace {

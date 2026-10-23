@@ -1,14 +1,12 @@
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "../gpu/guest_memory_snapshot.h"
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
+#include "../host/guest_address_space.h"
 
 namespace {
 
@@ -69,50 +67,77 @@ int main()
     if (!live || live[7] != 0xEE)
         return Fail("live reads were not restored after snapshot scope");
 
-#if defined(_WIN32)
-    constexpr size_t physicalBytes = 0x10000;
-    constexpr uintptr_t physicalViews[] = {
-        0xA0000000ull, 0xC0000000ull, 0xE0000000ull};
-    HANDLE process = GetCurrentProcess();
-    auto* aliasBase = static_cast<uint8_t*>(VirtualAlloc2(
-        process, nullptr, 1ull << 32,
-        MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0));
+    // Production guest layout: 4 GiB with three 512 MiB physical aliases.
+    constexpr size_t kGuestBytes = size_t(1) << 32;
+    constexpr size_t kPhysicalBytes = 0x20000000;
+    constexpr size_t kPhysicalViews[] = {0xA0000000, 0xC0000000, 0xE0000000};
+    std::string error;
+    uint8_t* aliasBase = mojorecomp::host::ReserveGuestAddressSpace(
+        kGuestBytes, kPhysicalBytes, kPhysicalViews, error);
     if (!aliasBase)
-        return Fail("physical-alias test could not reserve guest address space");
-
-    HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
-                                        PAGE_READWRITE | SEC_COMMIT,
-                                        0, physicalBytes, nullptr);
-    if (!mapping)
-        return Fail("physical-alias test could not create shared backing");
-    for (uintptr_t view : physicalViews)
     {
-        if (!VirtualFree(aliasBase + view, physicalBytes,
-                         MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) ||
-            !MapViewOfFile3(mapping, process, aliasBase + view, 0, physicalBytes,
-                            MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, nullptr, 0))
-        {
-            CloseHandle(mapping);
-            return Fail("physical-alias test could not map all guest views");
-        }
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return Fail("guest address space reservation failed");
     }
-    CloseHandle(mapping);
+
+    aliasBase[0x82000000u] = 0x5A;
+    if (aliasBase[0x82000000u] != 0x5A)
+        return Fail("low guest memory is not writable");
+    aliasBase[0xA0002000u] = 0x11;
+    if (aliasBase[0xC0002000u] != 0x11 || aliasBase[0xE0002000u] != 0x11)
+        return Fail("physical views do not alias the same backing");
 
     constexpr uint32_t trackedAddress = 0xA0001000u;
     aliasBase[trackedAddress] = 0x31;
     GuestMemorySnapshot beforeAliasWrite;
     if (!beforeAliasWrite.Capture(aliasBase, trackedAddress, 1))
         return Fail("tracked alias snapshot capture failed");
-    aliasBase[0xC0001000u] = 0x72;
+    const uint64_t missesAfterFirstCapture = GuestSnapshotCacheMissCount();
 
+    GuestMemorySnapshot unchanged;
+    if (!unchanged.Capture(aliasBase, trackedAddress, 1) ||
+        GuestSnapshotCacheHitCount() == 0 ||
+        GuestSnapshotCacheMissCount() != missesAfterFirstCapture)
+        return Fail("unchanged tracked range was not served from the cache");
+
+    // The write faults on the read-only tracked page, the write-fault handler
+    // makes it writable again, and the write is retried.
+    aliasBase[0xC0001000u] = 0x72;
     GuestMemorySnapshot afterAliasWrite;
     if (!afterAliasWrite.Capture(aliasBase, trackedAddress, 1))
         return Fail("tracked alias recapture failed");
     const uint8_t* refreshed = afterAliasWrite.Resolve(trackedAddress, 1);
     if (!refreshed || refreshed[0] != 0x72)
         return Fail("write through a physical alias reused stale snapshot bytes");
+    const uint8_t* original = beforeAliasWrite.Resolve(trackedAddress, 1);
+    if (!original || original[0] != 0x31)
+        return Fail("earlier snapshot changed after a guest write");
+
+    // Writes from other threads must be tracked the same way.
+    constexpr uint32_t threadedAddress = 0xA0010000u;
+    GuestMemorySnapshot beforeThreadWrites;
+    if (!beforeThreadWrites.Capture(aliasBase, threadedAddress, 4 * 4096))
+        return Fail("multi-page capture failed");
+    std::vector<std::thread> writers;
+    for (uint32_t i = 0; i < 4; ++i)
+        writers.emplace_back([aliasBase, i] {
+            aliasBase[0xE0010000u + i * 4096u + 8u] = static_cast<uint8_t>(0xA0u + i);
+        });
+    for (auto& writer : writers)
+        writer.join();
+    GuestMemorySnapshot afterThreadWrites;
+    if (!afterThreadWrites.Capture(aliasBase, threadedAddress, 4 * 4096))
+        return Fail("multi-page recapture failed");
+    const uint8_t* pages = afterThreadWrites.Resolve(threadedAddress, 4 * 4096);
+    for (uint32_t i = 0; pages && i < 4; ++i)
+        if (pages[i * 4096u + 8u] != 0xA0u + i)
+            return Fail("write from another thread reused stale snapshot bytes");
     GuestSnapshotCacheShutdown();
-#endif
+
+    // After shutdown the pages are writable again without any handler.
+    aliasBase[trackedAddress] = 0x99;
+    if (aliasBase[0xC0001000u] != 0x99)
+        return Fail("tracked pages were not restored to read-write on shutdown");
 
     std::puts("PASS: guest memory snapshot freezes draw-visible bytes and restores live reads.");
     return 0;
