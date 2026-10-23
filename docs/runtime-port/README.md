@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-04 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-05 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -49,7 +49,7 @@ the package section when a package changes state, and update
 | RP-02 | Portable CMake toolchain and presets | 0 Foundations | RP-01 | in progress |
 | RP-03 | Cross-platform setup entry point (replaces `setup.bat`) | 0 Foundations | RP-02 | in progress |
 | RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | in progress |
-| RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | todo |
+| RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | in progress |
 | RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | todo |
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | todo |
 | RP-08 | Portable guest fibers | 1 Host layer | RP-05 | todo |
@@ -123,6 +123,14 @@ types, then route the existing call sites through them (`host_paths.cpp`,
 `timebase.cpp`, `xma_decoder.cpp`).
 Done when: no shared file outside `runtime/host/` calls these Win32 APIs and
 Windows behavior is unchanged.
+Status: `host/platform.h` with `platform_windows.cpp` and `platform_posix.cpp`
+(selected by CMake) covers executable path, thread id, name, and priority,
+64-bit file positioning, resizing and sync, shared library names, and dynamic
+loading, with a `HostPlatform` test. All listed call sites plus
+`title_resources.cpp` use it; `timebase.cpp` and `xma_decoder.cpp` needed no
+change. The Vulkan loader stays with RP-12, where SDL3 loads it, and the
+remaining `boot_probe.cpp` calls with RP-19. Remaining: build and run the
+runtime on Windows.
 
 **RP-06 Host synchronization and timing.**
 Replace the waitable timer in `host/timing.cpp` with a host timer using

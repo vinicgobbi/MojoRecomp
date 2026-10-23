@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <io.h>
 
 #include <algorithm>
 #include <array>
@@ -32,6 +31,7 @@
 #include "../cpu/timebase.h"
 #include "../cpu/guest_thread.h"
 #include "../host/timing.h"
+#include "../host/platform.h"
 #include "../cpu/guest_fiber.h"
 #include "../gpu/pm4.h"
 #include "../host/input.h"
@@ -1587,7 +1587,7 @@ bool DrainCurrentThreadApcs()
     g_pendingApcs.clear();
 
     std::vector<PendingXamCompletion> xamQueue;
-    const uint32_t hostThreadId = GetCurrentThreadId();
+    const uint32_t hostThreadId = mojorecomp::host::CurrentThreadId();
     {
         std::lock_guard lock(g_xamCompletionMutex);
         auto it = g_pendingXamCompletions.begin();
@@ -1656,31 +1656,19 @@ void SignalHandleEvent(uint32_t handle)
 
 int Seek64(FILE* fp, int64_t offset, int origin)
 {
-#if defined(_WIN32)
-    return _fseeki64(fp, offset, origin);
-#else
-    return fseeko(fp, offset, origin);
-#endif
+    return mojorecomp::host::SeekFile64(fp, offset, origin);
 }
 
 int64_t Tell64(FILE* fp)
 {
-#if defined(_WIN32)
-    return _ftelli64(fp);
-#else
-    return ftello(fp);
-#endif
+    return mojorecomp::host::TellFile64(fp);
 }
 
 bool ResizeFile64(FILE* fp, uint64_t size)
 {
     if (!fp || size > uint64_t(INT64_MAX))
         return false;
-#if defined(_WIN32)
-    return _chsize_s(_fileno(fp), static_cast<__int64>(size)) == 0;
-#else
-    return ftruncate(fileno(fp), static_cast<off_t>(size)) == 0;
-#endif
+    return mojorecomp::host::ResizeFile(fp, static_cast<int64_t>(size));
 }
 
 enum : uint32_t
@@ -3567,7 +3555,7 @@ uint32_t CompleteXamIoRequest(uint32_t result, uint32_t overlappedAddress)
     const uint32_t event = overlapped->event;
     const uint32_t completionRoutine = overlapped->completionRoutine;
     const uint32_t completionContext = overlapped->completionContext;
-    const uint32_t hostThreadId = GetCurrentThreadId();
+    const uint32_t hostThreadId = mojorecomp::host::CurrentThreadId();
 
     // Retail code may initialize or inspect the XOVERLAPPED immediately after
     // the export returns. Publishing completion before returning can therefore
@@ -4309,13 +4297,11 @@ uint32_t XamContentFlush_x(const char* rootName, XamOverlapped* overlapped)
                 result = kStatusUnsuccessful;
                 break;
             }
-#if defined(_WIN32)
-            if (_commit(_fileno(file->fp)) != 0)
+            if (!mojorecomp::host::SyncFileToStorage(file->fp))
             {
                 result = kStatusUnsuccessful;
                 break;
             }
-#endif
             ++flushed;
         }
         KLOG("XamContentFlush root='%s' files=%u result=%08X ov=%08X lr=%08X\n",

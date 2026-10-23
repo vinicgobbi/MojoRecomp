@@ -14,6 +14,17 @@ set(MOJORECOMP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 option(MOJORECOMP_GUEST_IMAGE
     "Build the translated guest image, the runtime executables, and their probes" ON)
 
+# Host OS primitives (host/platform.h) have one implementation per host.
+if(WIN32)
+    set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_windows.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_posix.cpp)
+else()
+    message(FATAL_ERROR "MojoRecomp runtime supports Windows and Linux hosts only")
+endif()
+find_package(Threads REQUIRED)
+set(MOJORECOMP_HOST_PLATFORM_LIBS Threads::Threads ${CMAKE_DL_LIBS})
+
 if(WIN32)
     enable_language(RC)
     file(TO_CMAKE_PATH
@@ -147,7 +158,9 @@ if(BUILD_TESTING)
     add_executable(MojoRecompGpuExecutorTest
         tests/gpu_executor_test.cpp
         gpu/gpu_executor.cpp
-        gpu/guest_memory_snapshot.cpp)
+        gpu/guest_memory_snapshot.cpp
+        ${MOJORECOMP_HOST_PLATFORM_SOURCE})
+    target_link_libraries(MojoRecompGpuExecutorTest PRIVATE ${MOJORECOMP_HOST_PLATFORM_LIBS})
     add_test(NAME GpuExecutor COMMAND MojoRecompGpuExecutorTest)
     set_tests_properties(GpuExecutor PROPERTIES TIMEOUT 10 LABELS "gpu;performance")
     add_executable(MojoRecompGuestMemorySnapshotTest
@@ -195,6 +208,12 @@ if(BUILD_TESTING)
         kernel/rcf_diagnostics.cpp)
     add_test(NAME RcfDiagnostics COMMAND MojoRecompRcfDiagnosticsTest)
     set_tests_properties(RcfDiagnostics PROPERTIES TIMEOUT 10 LABELS "kernel;diagnostics")
+    add_executable(MojoRecompHostPlatformTest
+        tests/host_platform_test.cpp
+        ${MOJORECOMP_HOST_PLATFORM_SOURCE})
+    target_link_libraries(MojoRecompHostPlatformTest PRIVATE ${MOJORECOMP_HOST_PLATFORM_LIBS})
+    add_test(NAME HostPlatform COMMAND MojoRecompHostPlatformTest)
+    set_tests_properties(HostPlatform PROPERTIES TIMEOUT 10 LABELS "host")
 endif()
 
 if(NOT MOJORECOMP_GUEST_IMAGE)
@@ -404,11 +423,13 @@ if(MOJORECOMP_LTO)
     add_library(mojorecomp_shader_xlate OBJECT
         gpu/shader_translator.cpp
         host/host_paths.cpp
+        ${MOJORECOMP_HOST_PLATFORM_SOURCE}
         "${XENOS_ROOT}/XenosRecomp/shader_recompiler.cpp")
 else()
     add_library(mojorecomp_shader_xlate STATIC
         gpu/shader_translator.cpp
         host/host_paths.cpp
+        ${MOJORECOMP_HOST_PLATFORM_SOURCE}
         "${XENOS_ROOT}/XenosRecomp/shader_recompiler.cpp")
 endif()
 mojorecomp_enable_lto(mojorecomp_shader_xlate)
@@ -420,9 +441,14 @@ target_include_directories(mojorecomp_shader_xlate PRIVATE
     "${XENON_ROOT}/thirdparty/fmt/include"
     "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(mojorecomp_shader_xlate PRIVATE "${XENON_FMT}")
+target_link_libraries(mojorecomp_shader_xlate PUBLIC ${MOJORECOMP_HOST_PLATFORM_LIBS})
 if(WIN32)
     target_compile_definitions(mojorecomp_shader_xlate PRIVATE
         NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+else()
+    # Off Windows, DXC's WinAdapter.h emulates __uuidof only when asked; without
+    # this it falls back to MSVC's __declspec(uuid).
+    target_compile_definitions(mojorecomp_shader_xlate PRIVATE __EMULATE_UUID=1)
 endif()
 
 if(MSVC)

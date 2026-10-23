@@ -37,6 +37,7 @@
 #include "../kernel/klog.h"
 #include "primitive_utils.h"
 #include "../host/host_paths.h"
+#include "../host/platform.h"
 #include "../host/crash_reporter.h"
 #include "../host/frame_rate_policy.h"
 #include "../host/presentation_metrics.h"
@@ -1071,7 +1072,7 @@ void ReportVulkanFailureResult(const char* call, VkResult result, const char* st
          call, static_cast<int>(result), name,
          static_cast<unsigned long long>(frame),
          static_cast<unsigned long long>(sequence),
-         static_cast<unsigned long>(GetCurrentThreadId()), stage);
+         static_cast<unsigned long>(mojorecomp::host::CurrentThreadId()), stage);
     mojorecomp::host::RecordVulkanFailure(
         call, static_cast<int32_t>(result), name, frame, sequence, stage);
 }
@@ -3861,9 +3862,8 @@ void StartEdramShaderPrewarmWorker()
     g_edramShaderPrewarmFailed.store(0, std::memory_order_relaxed);
     g_edramShaderPrewarmThread = std::thread(
         [shaderStencilExport, guestSamples]() {
-#ifdef _WIN32
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#endif
+            mojorecomp::host::SetCurrentThreadPriority(
+                mojorecomp::host::ThreadPriority::BelowNormal);
             const auto start = PerfClock::now();
 
             auto compileVariant = [&](EdramOwnerKind sourceKind,
@@ -10488,9 +10488,8 @@ void StartPipelinePrewarmWorker()
     g_pipelinePrewarmCompiled.store(0, std::memory_order_relaxed);
     g_pipelinePrewarmSkipped.store(0, std::memory_order_relaxed);
     g_pipelinePrewarmThread = std::thread([manifest = std::move(manifest)]() mutable {
-#ifdef _WIN32
-        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#endif
+        mojorecomp::host::SetCurrentThreadPriority(
+            mojorecomp::host::ThreadPriority::BelowNormal);
         VkPipelineCacheCreateInfo cacheInfo{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         if (p_vkCreatePipelineCache)
         {

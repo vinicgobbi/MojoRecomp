@@ -52,7 +52,7 @@ Xbox API and are platform-neutral.
 | `host/window.cpp`, `host/window.h` | 314 | Window class, `WndProc`, `SetWindowPos`, monitor queries, message pump, `WM_APP` title updates | SDL3 window and event loop (RP-11) |
 | `host/input.cpp` | 929 | XInput loaded with `LoadLibraryW`; SDL3 gamepads behind `MOJORECOMP_HAS_SDL3` | SDL3 only on Linux, keep merge logic (RP-13) |
 | `host/timing.cpp` | 99 | High-resolution waitable timer | `clock_nanosleep` with `CLOCK_MONOTONIC` (RP-06) |
-| `host/host_paths.cpp` | 26 | `GetModuleFileNameW`; falls back to the current directory | `/proc/self/exe` (RP-05) |
+| `host/host_paths.cpp` | 26 | `GetModuleFileNameW`; falls back to the current directory | Resolved by RP-05: `host::ExecutablePath()` (`/proc/self/exe` on Linux) |
 | `host/system_font_atlas.cpp` | 94 | GDI: `CreateFontW`, `CreateDIBSection`, `TextOutW` | Open decision D2 (RP-15) |
 | `host/crash_reporter_windows.cpp` | 522 | SEH (`__try`/`__except`), `SetUnhandledExceptionFilter`, `MiniDumpWriteDump` | `host/crash_reporter_stub.cpp` first, signal handler later (RP-09) |
 | `debug_mode.cpp` | 395 | `GetAsyncKeyState(VK_F1..VK_F10)`, `GetForegroundWindow` | SDL3 keyboard state and window focus (RP-13) |
@@ -63,27 +63,27 @@ Xbox API and are platform-neutral.
 | File | Lines | Windows usage | Planned replacement |
 | --- | ---: | --- | --- |
 | `cpu/guest_fiber.cpp` | 152 | `ConvertThreadToFiberEx(FIBER_FLAG_FLOAT_SWITCH)`, `CreateFiber`, `SwitchToFiber`, `IsThreadAFiber` | Portable context switch that also saves FP/SSE control state (RP-08) |
-| `cpu/timebase.cpp` | 145 | One `_MSC_VER` branch | Compiler-neutral intrinsic (RP-05) |
+| `cpu/timebase.cpp` | 145 | One `_MSC_VER` branch, in the ARM64 path only | None: x86-64 already uses `__builtin_ia32_rdtsc` and ARM64 is out of scope |
 | `kernel/memory.cpp` | 154 | `VirtualAlloc`/`VirtualFree` and file mappings; POSIX `mmap` branch exists | Verify and test the existing POSIX branch (RP-07) |
-| `kernel/imports.cpp` | 4752 | Native `CRITICAL_SECTION` (a `std::recursive_mutex` fallback exists), `GetCurrentThreadId`, `<io.h>`, `_commit` | Host thread id and file sync in the host layer (RP-05, RP-06) |
-| `title_resources.cpp` | 39 | `_fseeki64`/`_ftelli64` (POSIX branch exists) | Verify only |
+| `kernel/imports.cpp` | 4752 | Native `CRITICAL_SECTION` (a `std::recursive_mutex` fallback exists), `FILETIME`, other `windows.h` types | Thread id, 64-bit file helpers, and file sync moved to the host layer (RP-05); synchronization remains (RP-06) |
+| `title_resources.cpp` | 39 | `_fseeki64`/`_ftelli64` | Resolved by RP-05: host 64-bit file helpers |
 
 ### GPU
 
 | File | Lines | Windows usage | Planned replacement |
 | --- | ---: | --- | --- |
-| `gpu/vk_presenter.cpp` | 14897 | `vkCreateWin32SurfaceKHR`, loads `vulkan-1.dll`, `HWND`, `SetThreadPriority`, `GetAsyncKeyState(VK_F12)` | SDL3 surface, Vulkan loader by name, host thread priority (RP-12) |
+| `gpu/vk_presenter.cpp` | 14897 | `vkCreateWin32SurfaceKHR`, loads `vulkan-1.dll`, `HWND`, `GetAsyncKeyState(VK_F12)`, BMP structs for screenshots | SDL3 surface and Vulkan loader (RP-12); thread id and priority moved to the host layer (RP-05) |
 | `gpu/hardware_probe.cpp` | 330 | Win32 surface and loader for the launcher hardware probe | Same as above (RP-12) |
-| `gpu/shader_translator.cpp` | 1399 | `LoadLibraryA` of DXC; `dlopen` branch exists | Verify with a Linux `libdxcompiler.so` (RP-17) |
+| `gpu/shader_translator.cpp` | 1399 | COM base headers for `dxcapi.h` | DXC loading moved to `host::DynamicLibrary` (RP-05); compiles on Linux with `__EMULATE_UUID`; verify with a Linux `libdxcompiler.so` (RP-17) |
 | `gpu/guest_memory_snapshot.cpp` | 561 | `AddVectoredExceptionHandler` + `VirtualProtect` write tracking | `SIGSEGV` handler + `mprotect` (RP-07) |
-| `gpu/gpu_executor.cpp`, `gpu/vd.cpp` | 1244 | `SetThreadDescription` | Host thread naming (RP-05) |
+| `gpu/gpu_executor.cpp`, `gpu/vd.cpp` | 1244 | None | Resolved by RP-05: host thread naming and id; both compile on Linux |
 
 ### Audio
 
 | File | Lines | Windows usage | Planned replacement |
 | --- | ---: | --- | --- |
 | `audio/xaudio.cpp` | 1204 | `waveOut*` device, Win32 events | SDL3 audio stream (RP-14) |
-| `audio/xma_decoder.cpp` | 1284 | `DWORD` typedefs only | Fixed-width types (RP-05) |
+| `audio/xma_decoder.cpp` | 1284 | None (`DWORD` appears only in comments about XMA context words) | None |
 
 ### Tests
 

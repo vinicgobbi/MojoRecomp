@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "gpu/pm4.h"
+#include "host/platform.h"
 #include "kernel/klog.h"
 
 void CotTitleResources_OnFileOpened(std::string_view guestPath, FILE* file,
@@ -13,13 +14,8 @@ void CotTitleResources_OnFileOpened(std::string_view guestPath, FILE* file,
         !CotTitleResources_IsBinkShaderPath(guestPath))
         return;
 
-#if defined(_WIN32)
-    const int64_t savedPosition = _ftelli64(file);
-    const bool rewound = _fseeki64(file, 0, SEEK_SET) == 0;
-#else
-    const int64_t savedPosition = ftello(file);
-    const bool rewound = fseeko(file, 0, SEEK_SET) == 0;
-#endif
+    const int64_t savedPosition = mojorecomp::host::TellFile64(file);
+    const bool rewound = mojorecomp::host::SeekFile64(file, 0, SEEK_SET) == 0;
     std::vector<uint8_t> container(static_cast<size_t>(size));
     const bool registered = rewound &&
         std::fread(container.data(), 1, container.size(), file) == container.size() &&
@@ -29,11 +25,5 @@ void CotTitleResources_OnFileOpened(std::string_view guestPath, FILE* file,
              static_cast<int>(guestPath.size()), guestPath.data());
 
     if (savedPosition >= 0)
-    {
-#if defined(_WIN32)
-        _fseeki64(file, savedPosition, SEEK_SET);
-#else
-        fseeko(file, savedPosition, SEEK_SET);
-#endif
-    }
+        mojorecomp::host::SeekFile64(file, savedPosition, SEEK_SET);
 }

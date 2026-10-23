@@ -1,17 +1,12 @@
 #include "gpu_executor.h"
 
 #include "guest_memory_snapshot.h"
+#include "../host/platform.h"
 
 #include <algorithm>
 #include <chrono>
 #include <type_traits>
 #include <utility>
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 namespace mojorecomp::gpu {
 namespace {
@@ -399,9 +394,7 @@ bool AsynchronousGpuExecutor::Execute(const RenderCommand& command)
 
 void AsynchronousGpuExecutor::WorkerMain()
 {
-#if defined(_WIN32)
-    SetThreadDescription(GetCurrentThread(), L"MojoRecomp Vulkan");
-#endif
+    mojorecomp::host::SetCurrentThreadName("MojoRecomp Vulkan");
 
     for (;;)
     {

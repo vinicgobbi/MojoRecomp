@@ -31,14 +31,13 @@
 #define NEAR
 #include <unknwn.h>
 #include <objidl.h>
-#else
-#include <dlfcn.h>
 #endif
 #include <dxcapi.h>
 
 #include "shader_recompiler.h" // XenosRecomp's, via this TU's private include path
 #include "shader_translator.h"
 #include "../host/host_paths.h"
+#include "../host/platform.h"
 #include "mojorecomp_shader_common_embedded.h" // generated at configure time; see CMakeLists
 
 #include <algorithm>
@@ -52,6 +51,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 namespace ShaderTranslator
 {
@@ -870,13 +870,7 @@ static std::once_flag g_dxcOnce;
 
 static void LoadDxcOnce()
 {
-#ifdef _WIN32
-    const char* libName = "dxcompiler.dll";
-#elif defined(__APPLE__)
-    const char* libName = "libdxcompiler.dylib";
-#else
-    const char* libName = "libdxcompiler.so";
-#endif
+    const std::string libName = mojorecomp::host::SharedLibraryFileName("dxcompiler");
     std::vector<std::string> candidates;
     if (const char* env = getenv("MOJORECOMP_DXC_LIB"); env && *env)
         candidates.push_back(env);
@@ -898,20 +892,16 @@ static void LoadDxcOnce()
 
     for (const auto& c : candidates)
     {
-#ifdef _WIN32
-        HMODULE h = LoadLibraryA(c.c_str());
-        if (!h)
+        mojorecomp::host::DynamicLibrary library;
+        if (!library.Open(c))
             continue;
         auto proc = reinterpret_cast<DxcCreateInstanceProc>(
-            reinterpret_cast<void*>(GetProcAddress(h, "DxcCreateInstance")));
-#else
-        void* h = dlopen(c.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!h)
-            continue;
-        auto proc = reinterpret_cast<DxcCreateInstanceProc>(dlsym(h, "DxcCreateInstance"));
-#endif
+            library.Symbol("DxcCreateInstance"));
         if (proc)
         {
+            // Compiler instances live in thread_locals until process exit, so
+            // the library is intentionally never unloaded.
+            new mojorecomp::host::DynamicLibrary(std::move(library));
             g_dxcCreate = proc;
             fprintf(stderr, "[shxlate] dxcompiler: %s\n", c.c_str());
             return;

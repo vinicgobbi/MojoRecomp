@@ -1,8 +1,6 @@
 #include "vd.h"
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include "../host/platform.h"
 
 #include <atomic>
 #include <chrono>
@@ -332,7 +330,7 @@ void GraphicsVblankPump()
 // delivered by the parser exactly where an INTERRUPT packet appears in the stream.
 void GraphicsProgressPump()
 {
-    SetThreadDescription(GetCurrentThread(), L"MojoRecomp PM4");
+    mojorecomp::host::SetCurrentThreadName("MojoRecomp PM4");
     GuestThreadContext threadContext(2, 0x10000, 64, 0xEF1);
     uint32_t lastPublishedRptr = 0xFFFFFFFFu;
     const bool periodicDiagnostics = CpPeriodicDiagnosticsEnabled();
@@ -348,7 +346,7 @@ void GraphicsProgressPump()
     Pm4_SetInterruptWakeSink(WakeGraphicsProgressPump);
     RendererProbe_Init();
     KLOG("graphics command processor pump started (PM4) tid=%lu\n",
-         static_cast<unsigned long>(GetCurrentThreadId()));
+         static_cast<unsigned long>(mojorecomp::host::CurrentThreadId()));
 
     for (;;)
     {
