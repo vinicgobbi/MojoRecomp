@@ -51,7 +51,7 @@ Xbox API and are platform-neutral.
 | --- | ---: | --- | --- |
 | `host/window.cpp`, `host/window.h` | 314 | Window class, `WndProc`, `SetWindowPos`, monitor queries, message pump, `WM_APP` title updates | SDL3 window and event loop (RP-11) |
 | `host/input.cpp` | 929 | XInput loaded with `LoadLibraryW`; SDL3 gamepads behind `MOJORECOMP_HAS_SDL3` | SDL3 only on Linux, keep merge logic (RP-13) |
-| `host/timing.cpp` | 99 | High-resolution waitable timer | `clock_nanosleep` with `CLOCK_MONOTONIC` (RP-06) |
+| `host/timing.cpp` | 99 | High-resolution waitable timer | Linux uses `clock_nanosleep` with `CLOCK_MONOTONIC` (RP-06) |
 | `host/host_paths.cpp` | 26 | `GetModuleFileNameW`; falls back to the current directory | Resolved by RP-05: `host::ExecutablePath()` (`/proc/self/exe` on Linux) |
 | `host/system_font_atlas.cpp` | 94 | GDI: `CreateFontW`, `CreateDIBSection`, `TextOutW` | Open decision D2 (RP-15) |
 | `host/crash_reporter_windows.cpp` | 522 | SEH (`__try`/`__except`), `SetUnhandledExceptionFilter`, `MiniDumpWriteDump` | `host/crash_reporter_stub.cpp` first, signal handler later (RP-09) |
@@ -65,7 +65,7 @@ Xbox API and are platform-neutral.
 | `cpu/guest_fiber.cpp` | 152 | `ConvertThreadToFiberEx(FIBER_FLAG_FLOAT_SWITCH)`, `CreateFiber`, `SwitchToFiber`, `IsThreadAFiber` | Portable context switch that also saves FP/SSE control state (RP-08) |
 | `cpu/timebase.cpp` | 145 | One `_MSC_VER` branch, in the ARM64 path only | None: x86-64 already uses `__builtin_ia32_rdtsc` and ARM64 is out of scope |
 | `kernel/memory.cpp` | 154 | `VirtualAlloc`/`VirtualFree` and file mappings; POSIX `mmap` branch exists | Verify and test the existing POSIX branch (RP-07) |
-| `kernel/imports.cpp` | 4752 | Native `CRITICAL_SECTION` (a `std::recursive_mutex` fallback exists), `FILETIME`, other `windows.h` types | Thread id, 64-bit file helpers, and file sync moved to the host layer (RP-05); synchronization remains (RP-06) |
+| `kernel/imports.cpp` | 4752 | None; compiles on Linux | Resolved by RP-05 and RP-06: host thread id, file helpers, and `host::RecursiveLock`; calendar conversion in `kernel/time_fields.h` |
 | `title_resources.cpp` | 39 | `_fseeki64`/`_ftelli64` | Resolved by RP-05: host 64-bit file helpers |
 
 ### GPU

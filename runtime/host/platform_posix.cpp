@@ -6,6 +6,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <mutex>
 #include <system_error>
 #include <utility>
 
@@ -66,6 +67,27 @@ bool ResizeFile(std::FILE* file, int64_t size)
 bool SyncFileToStorage(std::FILE* file)
 {
     return fsync(fileno(file)) == 0;
+}
+
+struct RecursiveLock::Impl
+{
+    std::recursive_mutex mutex;
+};
+
+RecursiveLock::RecursiveLock() : impl_(std::make_unique<Impl>())
+{
+}
+
+RecursiveLock::~RecursiveLock() = default;
+
+void RecursiveLock::lock()
+{
+    impl_->mutex.lock();
+}
+
+void RecursiveLock::unlock()
+{
+    impl_->mutex.unlock();
 }
 
 std::string SharedLibraryFileName(std::string_view baseName)

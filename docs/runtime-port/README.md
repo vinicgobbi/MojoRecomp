@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-05 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-06 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -50,7 +50,7 @@ the package section when a package changes state, and update
 | RP-03 | Cross-platform setup entry point (replaces `setup.bat`) | 0 Foundations | RP-02 | in progress |
 | RP-04 | Cross-platform analyze and recompile entry points | 0 Foundations | RP-03 | in progress |
 | RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | in progress |
-| RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | todo |
+| RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | in progress |
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | todo |
 | RP-08 | Portable guest fibers | 1 Host layer | RP-05 | todo |
 | RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | todo |
@@ -140,6 +140,19 @@ path in `kernel/imports.cpp` stays as a Windows optimization or the existing
 stutter profiler before deciding).
 Done when: `MojoRecompTimingTest` passes on both hosts and frame pacing at
 30 FPS is unchanged on Windows.
+Status: on Linux `WaitUntil` sleeps with `clock_nanosleep(CLOCK_MONOTONIC,
+TIMER_ABSTIME)` instead of sleeping and then yielding in a loop for the last
+millisecond. Measured at a 33.3 ms period: mean lateness 137 us (was 260 us),
+p99 1.4 ms (was 4.7 ms), CPU 0.1% (was 2.3%); at a 2 ms period the old loop
+burned 42% of a core. `HostTiming` now also checks that `WaitUntil` never
+returns early. Guest critical sections use `host::RecursiveLock`: Windows keeps
+the native `CRITICAL_SECTION` path and `MOJORECOMP_CS_NATIVE` unchanged, and
+Linux uses `std::recursive_mutex`, so the Windows default decision is deferred
+until it can be measured in game. `RtlTimeToTimeFields` and
+`RtlTimeFieldsToTime` use host-independent calendar arithmetic
+(`kernel/time_fields.h`, `TimeFields` test, compared against the Win32 API on
+Windows), which removes `windows.h` from `kernel/imports.cpp`; it now compiles
+on Linux. Remaining: the Windows build and a 30 FPS pacing check in game.
 
 **RP-07 Guest memory mapping and write-watch.**
 Test the existing `mmap` path in `kernel/memory.cpp` and port the write

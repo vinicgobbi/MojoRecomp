@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 
@@ -46,5 +47,30 @@ int main()
         return Fail("cleared periodic deadline should stay inactive");
 
     std::puts("PASS: periodic deadline reset, advance, catch-up and rebase are deterministic.");
+
+    // WaitUntil must never return before its deadline; an early return would
+    // mean the host timer and steady_clock disagree. Lateness depends on the
+    // scheduler, so it is reported rather than asserted.
+    using mojorecomp::host::SteadyClock;
+    constexpr int kWaits = 60;
+    std::chrono::nanoseconds worstLate{0};
+    std::chrono::nanoseconds totalLate{0};
+    auto deadline = SteadyClock::now();
+    for (int i = 0; i < kWaits; ++i)
+    {
+        deadline += 2ms;
+        mojorecomp::host::WaitUntil(deadline);
+        const auto late = SteadyClock::now() - deadline;
+        if (late < std::chrono::nanoseconds::zero())
+            return Fail("WaitUntil returned before its deadline");
+        worstLate = std::max(worstLate, std::chrono::duration_cast<std::chrono::nanoseconds>(late));
+        totalLate += std::chrono::duration_cast<std::chrono::nanoseconds>(late);
+        deadline = std::max(deadline, SteadyClock::now());
+    }
+    std::printf("PASS: WaitUntil never returned early over %d waits "
+                "(mean late %lld us, worst %lld us).\n",
+                kWaits,
+                static_cast<long long>(totalLate.count() / kWaits / 1000),
+                static_cast<long long>(worstLate.count() / 1000));
     return 0;
 }

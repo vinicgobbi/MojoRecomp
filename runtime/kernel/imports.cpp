@@ -1,7 +1,3 @@
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -41,6 +37,7 @@
 #include "heap.h"
 #include "memory.h"
 #include "rcf_diagnostics.h"
+#include "time_fields.h"
 #include "unimplemented.h"
 #include "vfs.h"
 #include "xex_loader.h"
@@ -881,58 +878,7 @@ uint32_t MmDeleteKernelStack_x(uint32_t stackBase, uint32_t stackEnd)
 
 std::mutex g_csMapMutex;
 
-bool NativeCriticalSectionEnabled()
-{
-    static const bool enabled = [] {
-        const char* value = std::getenv("MOJORECOMP_CS_NATIVE");
-        return !value || !*value || std::strcmp(value, "0") != 0;
-    }();
-    return enabled;
-}
-
-struct HostRecursiveLock
-{
-    CRITICAL_SECTION native{};
-    std::unique_ptr<std::recursive_mutex> fallback;
-    bool useNative = false;
-
-    HostRecursiveLock() : useNative(NativeCriticalSectionEnabled())
-    {
-        if (useNative)
-        {
-            InitializeCriticalSectionEx(&native, 4000, 0);
-        }
-        else
-        {
-            fallback = std::make_unique<std::recursive_mutex>();
-        }
-    }
-
-    ~HostRecursiveLock()
-    {
-        if (useNative)
-            DeleteCriticalSection(&native);
-    }
-
-    HostRecursiveLock(const HostRecursiveLock&) = delete;
-    HostRecursiveLock& operator=(const HostRecursiveLock&) = delete;
-
-    void lock()
-    {
-        if (useNative)
-            EnterCriticalSection(&native);
-        else
-            fallback->lock();
-    }
-
-    void unlock()
-    {
-        if (useNative)
-            LeaveCriticalSection(&native);
-        else
-            fallback->unlock();
-    }
-};
+using HostRecursiveLock = mojorecomp::host::RecursiveLock;
 
 std::unordered_map<uint32_t, std::shared_ptr<HostRecursiveLock>> g_csMap;
 
@@ -2849,25 +2795,21 @@ void RtlTimeToTimeFields_x(be<uint64_t>* time, XTIME_FIELDS* fields)
     if (!time || !fields)
         return;
 
-    const uint64_t value = uint64_t(*time);
-    FILETIME fileTime{};
-    fileTime.dwLowDateTime = static_cast<DWORD>(value);
-    fileTime.dwHighDateTime = static_cast<DWORD>(value >> 32);
-    SYSTEMTIME systemTime{};
-    if (!FileTimeToSystemTime(&fileTime, &systemTime))
+    const auto calendar = mojorecomp::kernel::TimeToCalendar(uint64_t(*time));
+    if (!calendar)
     {
         std::memset(fields, 0, sizeof(*fields));
         return;
     }
 
-    fields->Year = systemTime.wYear;
-    fields->Month = systemTime.wMonth;
-    fields->Day = systemTime.wDay;
-    fields->Hour = systemTime.wHour;
-    fields->Minute = systemTime.wMinute;
-    fields->Second = systemTime.wSecond;
-    fields->Milliseconds = systemTime.wMilliseconds;
-    fields->Weekday = systemTime.wDayOfWeek;
+    fields->Year = calendar->year;
+    fields->Month = calendar->month;
+    fields->Day = calendar->day;
+    fields->Hour = calendar->hour;
+    fields->Minute = calendar->minute;
+    fields->Second = calendar->second;
+    fields->Milliseconds = calendar->milliseconds;
+    fields->Weekday = calendar->weekday;
 }
 
 uint32_t RtlTimeFieldsToTime_x(XTIME_FIELDS* fields, be<uint64_t>* time)
@@ -2875,21 +2817,19 @@ uint32_t RtlTimeFieldsToTime_x(XTIME_FIELDS* fields, be<uint64_t>* time)
     if (!fields || !time)
         return 0;
 
-    SYSTEMTIME systemTime{};
-    systemTime.wYear = uint16_t(fields->Year);
-    systemTime.wMonth = uint16_t(fields->Month);
-    systemTime.wDay = uint16_t(fields->Day);
-    systemTime.wHour = uint16_t(fields->Hour);
-    systemTime.wMinute = uint16_t(fields->Minute);
-    systemTime.wSecond = uint16_t(fields->Second);
-    systemTime.wMilliseconds = uint16_t(fields->Milliseconds);
+    mojorecomp::kernel::CalendarTime calendar;
+    calendar.year = uint16_t(fields->Year);
+    calendar.month = uint16_t(fields->Month);
+    calendar.day = uint16_t(fields->Day);
+    calendar.hour = uint16_t(fields->Hour);
+    calendar.minute = uint16_t(fields->Minute);
+    calendar.second = uint16_t(fields->Second);
+    calendar.milliseconds = uint16_t(fields->Milliseconds);
 
-    FILETIME fileTime{};
-    if (!SystemTimeToFileTime(&systemTime, &fileTime))
+    const auto value = mojorecomp::kernel::CalendarToTime(calendar);
+    if (!value)
         return 0;
-    const uint64_t value = uint64_t(fileTime.dwLowDateTime) |
-                           (uint64_t(fileTime.dwHighDateTime) << 32);
-    *time = value;
+    *time = *value;
     return 1;
 }
 

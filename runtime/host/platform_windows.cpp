@@ -7,6 +7,9 @@
 #include <io.h>
 
 #include <array>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <utility>
 
 namespace mojorecomp::host {
@@ -59,6 +62,57 @@ bool ResizeFile(std::FILE* file, int64_t size)
 bool SyncFileToStorage(std::FILE* file)
 {
     return _commit(_fileno(file)) == 0;
+}
+
+namespace {
+
+bool NativeCriticalSectionEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("MOJORECOMP_CS_NATIVE");
+        return !value || !*value || std::strcmp(value, "0") != 0;
+    }();
+    return enabled;
+}
+
+} // namespace
+
+struct RecursiveLock::Impl
+{
+    CRITICAL_SECTION native{};
+    std::unique_ptr<std::recursive_mutex> fallback;
+    bool useNative = false;
+};
+
+RecursiveLock::RecursiveLock() : impl_(std::make_unique<Impl>())
+{
+    impl_->useNative = NativeCriticalSectionEnabled();
+    if (impl_->useNative)
+        InitializeCriticalSectionEx(&impl_->native, 4000, 0);
+    else
+        impl_->fallback = std::make_unique<std::recursive_mutex>();
+}
+
+RecursiveLock::~RecursiveLock()
+{
+    if (impl_->useNative)
+        DeleteCriticalSection(&impl_->native);
+}
+
+void RecursiveLock::lock()
+{
+    if (impl_->useNative)
+        EnterCriticalSection(&impl_->native);
+    else
+        impl_->fallback->lock();
+}
+
+void RecursiveLock::unlock()
+{
+    if (impl_->useNative)
+        LeaveCriticalSection(&impl_->native);
+    else
+        impl_->fallback->unlock();
 }
 
 std::string SharedLibraryFileName(std::string_view baseName)

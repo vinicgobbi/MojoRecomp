@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -47,6 +48,27 @@ bool SyncFileToStorage(std::FILE* file);
 // File name of a shared library for this host, for example "dxcompiler" ->
 // "dxcompiler.dll" on Windows and "libdxcompiler.so" on Linux.
 std::string SharedLibraryFileName(std::string_view baseName);
+
+// Recursive lock backing guest critical sections. Windows uses a native
+// CRITICAL_SECTION with a spin count (MOJORECOMP_CS_NATIVE=0 selects
+// std::recursive_mutex instead); other hosts use std::recursive_mutex.
+// Satisfies the standard Lockable requirements.
+class RecursiveLock
+{
+public:
+    RecursiveLock();
+    ~RecursiveLock();
+
+    RecursiveLock(const RecursiveLock&) = delete;
+    RecursiveLock& operator=(const RecursiveLock&) = delete;
+
+    void lock();
+    void unlock();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 // Owns a dynamically loaded shared library. Move-only; unloads on destruction.
 class DynamicLibrary
