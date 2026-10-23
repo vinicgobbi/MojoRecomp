@@ -263,17 +263,36 @@ set(XENON_ROOT "${MOJORECOMP_ROOT}/thirdparty/work/XenonRecomp" CACHE PATH
 set(XENOS_ROOT "${MOJORECOMP_ROOT}/thirdparty/work/XenosRecomp" CACHE PATH
     "MojoRecomp-patched XenosRecomp work tree")
 
-if(WIN32 AND
-   EXISTS "${MOJORECOMP_SDL3_SOURCE}/include/SDL3/SDL.h" AND
-   EXISTS "${MOJORECOMP_SDL3_BUILD}/SDL3-static.lib")
-    add_library(mojorecomp_sdl3 STATIC IMPORTED GLOBAL)
-    set_target_properties(mojorecomp_sdl3 PROPERTIES
-        IMPORTED_LOCATION "${MOJORECOMP_SDL3_BUILD}/SDL3-static.lib"
-        INTERFACE_INCLUDE_DIRECTORIES "${MOJORECOMP_SDL3_SOURCE}/include")
+# SDL3 provides the window, input, and audio on both hosts, so it is required.
+# tools/setup_toolchain.py builds it statically; on Linux SDL loads its system
+# backends (Wayland, X11, PipeWire, PulseAudio, ALSA, udev) at run time.
+if(WIN32)
+    set(MOJORECOMP_SDL3_LIBRARY "${MOJORECOMP_SDL3_BUILD}/SDL3-static.lib")
+else()
+    set(MOJORECOMP_SDL3_LIBRARY "${MOJORECOMP_SDL3_BUILD}/libSDL3.a")
+endif()
+if(NOT EXISTS "${MOJORECOMP_SDL3_SOURCE}/include/SDL3/SDL.h" OR
+   NOT EXISTS "${MOJORECOMP_SDL3_LIBRARY}")
+    message(FATAL_ERROR
+        "SDL3 is missing (${MOJORECOMP_SDL3_LIBRARY}). Run tools/setup_toolchain.py first.")
+endif()
+add_library(mojorecomp_sdl3 STATIC IMPORTED GLOBAL)
+set_target_properties(mojorecomp_sdl3 PROPERTIES
+    IMPORTED_LOCATION "${MOJORECOMP_SDL3_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${MOJORECOMP_SDL3_SOURCE}/include")
+if(WIN32)
     target_link_libraries(mojorecomp_sdl3 INTERFACE
         kernel32 user32 gdi32 winmm imm32 ole32 oleaut32 version uuid
         advapi32 setupapi shell32 hid dinput8)
-    set(MOJORECOMP_HAS_SDL3 ON)
+else()
+    target_link_libraries(mojorecomp_sdl3 INTERFACE m Threads::Threads ${CMAKE_DL_LIBS})
+endif()
+if(BUILD_TESTING AND NOT WIN32)
+    # On Windows SDL3 is exercised by the runtime executable and its probes.
+    add_executable(MojoRecompSdl3BackendsTest tests/sdl3_backends_test.cpp)
+    target_link_libraries(MojoRecompSdl3BackendsTest PRIVATE mojorecomp_sdl3)
+    add_test(NAME Sdl3Backends COMMAND MojoRecompSdl3BackendsTest)
+    set_tests_properties(Sdl3Backends PROPERTIES TIMEOUT 10 LABELS "host;sdl")
 endif()
 
 set(XENON_BUILD "${MOJORECOMP_ROOT}/thirdparty/build/XenonRecomp")
@@ -568,17 +587,15 @@ if(BUILD_TESTING AND WIN32)
         COMMAND MojoRecompBootProbe --window-close-self-test)
     set_tests_properties(RuntimeWindowClose PROPERTIES TIMEOUT 10 LABELS "host;window;process")
 
-    if(MOJORECOMP_HAS_SDL3)
-        # Manual hardware probe only (not registered with CTest): useful for
-        # checking native PlayStation/Xbox mappings without launching the game.
-        add_executable(MojoRecompInputProbe EXCLUDE_FROM_ALL tests/input_probe.cpp)
-        target_link_libraries(MojoRecompInputProbe PRIVATE
-            mojorecomp_sdl3
-            ucrt
-            oldnames
-            legacy_stdio_definitions)
-        target_link_options(MojoRecompInputProbe PRIVATE "/NODEFAULTLIB:libucrt")
-    endif()
+    # Manual hardware probe only (not registered with CTest): useful for
+    # checking native PlayStation/Xbox mappings without launching the game.
+    add_executable(MojoRecompInputProbe EXCLUDE_FROM_ALL tests/input_probe.cpp)
+    target_link_libraries(MojoRecompInputProbe PRIVATE
+        mojorecomp_sdl3
+        ucrt
+        oldnames
+        legacy_stdio_definitions)
+    target_link_options(MojoRecompInputProbe PRIVATE "/NODEFAULTLIB:libucrt")
 
     set(TEXTURE_PROBE_VS "${CMAKE_CURRENT_BINARY_DIR}/texture_probe_vs.spv")
     add_custom_command(OUTPUT "${TEXTURE_PROBE_VS}"
@@ -662,10 +679,9 @@ if(WIN32)
         oldnames
         legacy_stdio_definitions)
     target_link_options(MojoRecompSmoke PRIVATE "/NODEFAULTLIB:libucrt")
-    if(MOJORECOMP_HAS_SDL3)
-        target_link_libraries(MojoRecompSmoke PRIVATE mojorecomp_sdl3)
-        target_compile_definitions(MojoRecompSmoke PRIVATE MOJORECOMP_HAS_SDL3=1)
-    endif()
+    target_link_libraries(MojoRecompSmoke PRIVATE mojorecomp_sdl3)
+else()
+    target_link_libraries(MojoRecompSmoke PRIVATE mojorecomp_sdl3)
 endif()
 
 get_target_property(MOJORECOMP_PPC_TARGET_TYPE mojorecomp_ppc TYPE)
@@ -718,10 +734,7 @@ if(WIN32)
         target_include_directories(MojoRecompBootProbe PRIVATE "${MOJORECOMP_FFMPEG_ROOT}")
         target_compile_definitions(MojoRecompBootProbe PRIVATE MOJORECOMP_HAS_FFMPEG=1)
     endif()
-    if(MOJORECOMP_HAS_SDL3)
-        target_link_libraries(MojoRecompBootProbe PRIVATE mojorecomp_sdl3)
-        target_compile_definitions(MojoRecompBootProbe PRIVATE MOJORECOMP_HAS_SDL3=1)
-    endif()
+    target_link_libraries(MojoRecompBootProbe PRIVATE mojorecomp_sdl3)
     target_link_libraries(MojoRecompBootProbe PRIVATE
         mojorecomp_ppc
         mojorecomp_shader_xlate

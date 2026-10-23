@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-09 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-10 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -54,7 +54,7 @@ the package section when a package changes state, and update
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | in progress |
 | RP-08 | Portable guest fibers | 1 Host layer | RP-05 | in progress |
 | RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | in progress |
-| RP-10 | SDL3 as a required dependency on both hosts | 2 Platform services | RP-03 | todo |
+| RP-10 | SDL3 as a required dependency on both hosts | 2 Platform services | RP-03 | in progress |
 | RP-11 | SDL3 window | 2 Platform services | RP-10 | todo |
 | RP-12 | Vulkan surface and loader through SDL3 | 2 Platform services | RP-11 | todo |
 | RP-13 | Keyboard and gamepad input through SDL3 | 2 Platform services | RP-11 | todo |
@@ -228,6 +228,18 @@ Build static SDL3 on both hosts and make it required instead of optional
 packages are missing (for example it configures with no ALSA, PulseAudio, or
 PipeWire audio), so the Linux build must require the audio, Wayland, X11, and
 udev backends the runtime relies on instead of accepting SDL's defaults.
+Status: runtime configuration fails with a pointer to the setup program when
+the static SDL3 library (`SDL3-static.lib` or `libSDL3.a`) is missing, and
+`MOJORECOMP_HAS_SDL3` is gone from CMake and `host/input.cpp`. On Linux,
+`tools/setup_toolchain.py` checks SDL's generated `SDL_build_config.h` after
+configuring and stops, with the dependency hint, unless Wayland, X11, Vulkan
+surfaces, PipeWire, PulseAudio, ALSA, Linux joysticks, and udev are all
+enabled and loaded at run time, so the runtime has no hard dependency on any
+of them. The `Sdl3Backends` test (guest-image configurations on Linux) links
+the static library with the declared interface (`m`, threads, `dl`) and checks
+the compiled-in drivers; it passes, and the result needs only libc, libm, and
+libstdc++. Remaining: a Windows configure and build, whose SDL link is
+unchanged except that a missing library now stops configuration.
 
 **RP-11 SDL3 window.**
 Replace the Win32 window in `host/window.cpp` and window handling in

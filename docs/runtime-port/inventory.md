@@ -50,7 +50,7 @@ Xbox API and are platform-neutral.
 | File | Lines | Windows usage | Planned replacement |
 | --- | ---: | --- | --- |
 | `host/window.cpp`, `host/window.h` | 314 | Window class, `WndProc`, `SetWindowPos`, monitor queries, message pump, `WM_APP` title updates | SDL3 window and event loop (RP-11) |
-| `host/input.cpp` | 929 | XInput loaded with `LoadLibraryW`; SDL3 gamepads behind `MOJORECOMP_HAS_SDL3` | SDL3 only on Linux, keep merge logic (RP-13) |
+| `host/input.cpp` | 929 | XInput loaded with `LoadLibraryW`; SDL3 gamepads (always built since RP-10) | SDL3 only on Linux, keep merge logic (RP-13) |
 | `host/timing.cpp` | 99 | High-resolution waitable timer | Linux uses `clock_nanosleep` with `CLOCK_MONOTONIC` (RP-06) |
 | `host/host_paths.cpp` | 26 | `GetModuleFileNameW`; falls back to the current directory | Resolved by RP-05: `host::ExecutablePath()` (`/proc/self/exe` on Linux) |
 | `host/system_font_atlas.cpp` | 94 | GDI: `CreateFontW`, `CreateDIBSection`, `TextOutW` | Open decision D2 (RP-15) |
@@ -117,7 +117,7 @@ its guest space with `mmap` on Linux (RP-01).
 - Windows link libraries: `onecore`, `winmm`, `dbghelp`, `user32`, `gdi32`,
   `imm32`, `ole32`, `oleaut32`, `version`, `uuid`, `advapi32`, `setupapi`,
   `shell32`, `hid`, `dinput8`.
-- SDL3 is only used when `thirdparty/build/SDL/SDL3-static.lib` exists.
+- SDL3 is required (RP-10): `SDL3-static.lib` on Windows, `libSDL3.a` on Linux.
 - The FFmpeg and LZX libraries are looked up as `libavcodec.lib` plus
   `mojorecomp-ffmpeg.dll`; DXC as `thirdparty/dxc-bin/bin/x64/dxc.exe`.
 - Generated PPC code is compiled with `-msse4.1 -mavx` and thin LTO under
@@ -145,7 +145,7 @@ the shader recompiler, and the extract-xiso patch removes FTP support.
 | FFmpeg (LGPL, replaceable) | `mojorecomp-ffmpeg.dll` + import lib | `libmojorecomp-ffmpeg.so` | Built by `tools/ffmpeg-rexglue`; keep it dynamically linked and replaceable |
 | libmspack LZX (LGPL, replaceable) | `mojorecomp-lzx.dll` | `libmojorecomp-lzx.so` | Built by `tools/libmspack-lzx` |
 | DXC | `dxcompiler.dll`, `dxil.dll` (prebuilt, from XenosRecomp `dxc-bin`) | `libdxcompiler.so`, `libdxil.so` | The pinned `dxc-bin` already ships Linux x64 `libdxcompiler.so`, `libdxil.so`, and `dxc-linux` built from the same DXC commit as the Windows DLLs (`416fab6b`, 1.8.2407); license provenance still to record (D3) |
-| SDL3 | `SDL3-static.lib` | static `libSDL3.a` | Same pinned submodule |
+| SDL3 | `SDL3-static.lib` | static `libSDL3.a` | Same pinned submodule; on Linux its system backends are loaded at run time (RP-10) |
 | extract-xiso | `extract-xiso.exe` | `extract-xiso` | Built on Linux by `tools/extract-xiso` (RP-18) |
 | Vulkan loader | system `vulkan-1.dll` | system `libvulkan.so.1` | Not shipped |
 

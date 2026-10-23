@@ -8,9 +8,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 
-#if defined(MOJORECOMP_HAS_SDL3)
 #include <SDL3/SDL.h>
-#endif
 
 #include <algorithm>
 #include <array>
@@ -226,7 +224,6 @@ uint8_t NormalizeJoyTrigger(DWORD value, UINT minimum, UINT maximum)
     return static_cast<uint8_t>(std::clamp(normalized * 255.0, 0.0, 255.0));
 }
 
-#if defined(MOJORECOMP_HAS_SDL3)
 int16_t InvertSdlAxis(int16_t value)
 {
     return value == INT16_MIN ? INT16_MAX : static_cast<int16_t>(-value);
@@ -290,7 +287,6 @@ bool EnsureSdlGamepadSubsystem()
     }
     return initialized;
 }
-#endif
 
 enum class ControllerBackend : uint8_t
 {
@@ -305,9 +301,7 @@ struct ControllerSelection
     ControllerBackend backend = ControllerBackend::None;
     UINT id = 0;
     JOYCAPSW caps{};
-#if defined(MOJORECOMP_HAS_SDL3)
     SDL_Gamepad* gamepad = nullptr;
-#endif
     std::chrono::steady_clock::time_point nextScan{};
 };
 
@@ -329,10 +323,8 @@ bool ControllerIdInUse(ControllerBackend backend, UINT id, uint32_t exceptPlayer
 
 void ClearControllerSelection(ControllerSelection& selected)
 {
-#if defined(MOJORECOMP_HAS_SDL3)
     if (selected.gamepad)
         SDL_CloseGamepad(selected.gamepad);
-#endif
     selected = {};
 }
 
@@ -430,7 +422,6 @@ void MergeController(HostInputState& state, uint32_t playerIndex)
 
     // Keep using the currently selected device while it is alive. If it is
     // unplugged, fall through immediately and look for another one.
-#if defined(MOJORECOMP_HAS_SDL3)
     if (selected.backend == ControllerBackend::SDL3)
     {
         if (MergeSdlGamepad(state, selected.gamepad))
@@ -440,7 +431,6 @@ void MergeController(HostInputState& state, uint32_t playerIndex)
         ClearControllerSelection(selected);
     }
     else
-#endif
     if (selected.backend == ControllerBackend::XInput && getState)
     {
         XInputStateNative native{};
@@ -470,7 +460,6 @@ void MergeController(HostInputState& state, uint32_t playerIndex)
     // failed DLL calls on every guest input poll.
     selected.nextScan = now + std::chrono::milliseconds(250);
 
-#if defined(MOJORECOMP_HAS_SDL3)
     if (EnsureSdlGamepadSubsystem())
     {
         SDL_UpdateGamepads();
@@ -507,7 +496,6 @@ void MergeController(HostInputState& state, uint32_t playerIndex)
         }
         SDL_free(ids);
     }
-#endif
 
     if (getState)
     {
@@ -909,7 +897,6 @@ void HostInput_SetVibration(uint32_t playerIndex, uint16_t leftMotor,
 
     std::lock_guard lock(g_controllerMutex);
     auto& selected = g_controllers[playerIndex];
-#if defined(MOJORECOMP_HAS_SDL3)
     if (selected.backend == ControllerBackend::SDL3 && selected.gamepad &&
         SDL_GamepadConnected(selected.gamepad))
     {
@@ -917,7 +904,6 @@ void HostInput_SetVibration(uint32_t playerIndex, uint16_t leftMotor,
         SDL_RumbleGamepad(selected.gamepad, leftMotor, rightMotor, durationMs);
         return;
     }
-#endif
     if (selected.backend == ControllerBackend::XInput)
     {
         if (const auto setState = SetXInput())

@@ -76,6 +76,26 @@ class Component:
     linux_pending: str | None = None
     # Shown when the build fails on Linux, usually for missing system packages.
     linux_hint: str | None = None
+    # Linux only: a header the configure step generates (relative to the build
+    # directory) and the macros it must define, keyed by what each one means.
+    # Catches dependencies that drop features silently instead of failing.
+    linux_config_header: str | None = None
+    linux_required_defines: tuple[tuple[str, str], ...] = ()
+
+
+# SDL disables a backend without an error when its development package is
+# missing. The runtime needs these, each loaded at run time (the _DYNAMIC
+# macros), so one binary works with whatever the user's system provides.
+SDL_LINUX_REQUIRED_DEFINES = (
+    ("SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC", "Wayland video"),
+    ("SDL_VIDEO_DRIVER_X11_DYNAMIC", "X11 video"),
+    ("SDL_VIDEO_VULKAN", "Vulkan surfaces"),
+    ("SDL_AUDIO_DRIVER_PIPEWIRE_DYNAMIC", "PipeWire audio"),
+    ("SDL_AUDIO_DRIVER_PULSEAUDIO_DYNAMIC", "PulseAudio audio"),
+    ("SDL_AUDIO_DRIVER_ALSA_DYNAMIC", "ALSA audio"),
+    ("SDL_JOYSTICK_LINUX", "Linux joysticks"),
+    ("SDL_UDEV_DYNAMIC", "udev device discovery"),
+)
 
 
 COMPONENTS = (
@@ -101,6 +121,8 @@ COMPONENTS = (
         target="SDL3-static",
         linux_hint="Install SDL's Linux build dependencies, listed in "
                    "https://wiki.libsdl.org/SDL3/README-linux#build-dependencies",
+        linux_config_header="include-config-release/build_config/SDL_build_config.h",
+        linux_required_defines=SDL_LINUX_REQUIRED_DEFINES,
     ),
     Component(
         "extract-xiso",
@@ -288,6 +310,28 @@ def apply_patch(source: PatchedSource, checkout: Path) -> None:
     run(["git", "apply", str(patch)], cwd=checkout)
 
 
+def defined_macros(header: Path) -> set[str]:
+    macros = set()
+    for line in header.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == "#define":
+            macros.add(fields[1])
+    return macros
+
+
+def check_linux_config(component: Component) -> None:
+    if not IS_LINUX or not component.linux_config_header:
+        return
+    header = component.build / component.linux_config_header
+    if not header.is_file():
+        raise SetupError(f"{component.name} did not generate {header}")
+    macros = defined_macros(header)
+    missing = [meaning for macro, meaning in component.linux_required_defines
+               if macro not in macros]
+    if missing:
+        raise SetupError(f"{component.name} was configured without: {', '.join(missing)}.")
+
+
 def build_component(component: Component, toolchain: Toolchain, jobs: int) -> None:
     log(f"Building {component.name}")
     command = [toolchain.cmake, "--build", str(component.build), "--parallel", str(jobs)]
@@ -296,6 +340,7 @@ def build_component(component: Component, toolchain: Toolchain, jobs: int) -> No
     try:
         run([toolchain.cmake, "-S", str(component.source), "-B", str(component.build),
              *toolchain.configure_args, *component.args], env=toolchain.env)
+        check_linux_config(component)
         run(command, env=toolchain.env)
     except SetupError as error:
         if IS_LINUX and component.linux_hint:
