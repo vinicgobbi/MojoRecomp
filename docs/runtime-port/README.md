@@ -4,7 +4,7 @@ Plan for making the COT runtime build and run natively on Windows x64 and
 Linux x64. The factual baseline (what depends on Windows today, file by file)
 is in [inventory.md](inventory.md).
 
-Status: **in progress**. RP-01 to RP-07 and RP-18 are in progress. The launcher already runs
+Status: **in progress**. RP-01 to RP-08 and RP-18 are in progress. The launcher already runs
 natively on Linux and expects a `platform = "linux"` runtime component.
 
 ## Goal and scope
@@ -52,7 +52,7 @@ the package section when a package changes state, and update
 | RP-05 | Host platform primitives (paths, threads, libraries) | 1 Host layer | RP-01 | in progress |
 | RP-06 | Host synchronization and timing | 1 Host layer | RP-05 | in progress |
 | RP-07 | Guest memory mapping and write-watch | 1 Host layer | RP-05 | in progress |
-| RP-08 | Portable guest fibers | 1 Host layer | RP-05 | todo |
+| RP-08 | Portable guest fibers | 1 Host layer | RP-05 | in progress |
 | RP-09 | Crash reporting on Linux | 1 Host layer | RP-05 | todo |
 | RP-10 | SDL3 as a required dependency on both hosts | 2 Platform services | RP-03 | todo |
 | RP-11 | SDL3 window | 2 Platform services | RP-10 | todo |
@@ -182,6 +182,15 @@ resynchronization. Candidates: `ucontext`, or a small assembly switch shared by
 both hosts. This is the highest-risk package.
 Done when: `FiberProbe` passes on both hosts and fiber-heavy scenes behave the
 same on Windows.
+Status (decision D1): `host/fiber.h` with `fiber_windows.cpp`, which keeps the
+same Win32 fiber calls, and `fiber_posix.cpp`, which uses `ucontext` with 4 MiB
+`mmap` stacks and a guard page. `cpu/guest_fiber.cpp` no longer contains OS
+code. The game-independent `HostFiber` test covers switch order, per-fiber
+MXCSR, deep stacks, and several threads, and passes on Linux. A Linux switch
+costs about 210 ns because glibc's `swapcontext` also saves the signal mask.
+Remaining: `FiberProbe` (part of the runtime executable) on Linux with RP-19,
+the number of fiber switches per frame in game to judge that cost, and the
+Windows in-game check.
 
 **RP-09 Crash reporting on Linux.**
 Ship `host/crash_reporter_stub.cpp` on Linux first, then add a signal-based
@@ -269,10 +278,15 @@ regression pass. Linux must not be described as supported until this passes.
 
 | ID | Question | Options | Needed by |
 | --- | --- | --- | --- |
-| D1 | Fiber implementation | `ucontext` (simple, slower switches) or a shared assembly switch for both hosts | RP-08 |
 | D2 | On-screen text without GDI | Bundled font with stb_truetype (needs font license review), or system fonts through fontconfig and FreeType | RP-15 |
 | D3 | DXC for Linux | Official DXC Linux release matching the Windows binaries, or building DXC from source | RP-17 |
 | D4 | Linux crash dumps | Signal handler with backtrace text, or a minidump library | RP-09 |
 | D5 | Minimum Linux baseline | glibc version and distributions to support, matching the launcher AppImage | RP-19 |
 
 Record each decision here, with the reason, when it is made.
+
+## Decisions
+
+| ID | Decision | Reason |
+| --- | --- | --- |
+| D1 | Host fiber abstraction: Win32 fibers stay on Windows, `ucontext` on Linux; an assembly switch only for Linux if in-game switch counts make the ~210 ns `swapcontext` cost matter | Keeps Windows free of regression risk: the TEB stack limits, guard pages, `__chkstk`, SEH, and the crash reporter all depend on native fibers. glibc's `swapcontext` already saves and restores MXCSR and the x87 control word, matching `FIBER_FLAG_FLOAT_SWITCH`. |

@@ -62,7 +62,7 @@ Xbox API and are platform-neutral.
 
 | File | Lines | Windows usage | Planned replacement |
 | --- | ---: | --- | --- |
-| `cpu/guest_fiber.cpp` | 152 | `ConvertThreadToFiberEx(FIBER_FLAG_FLOAT_SWITCH)`, `CreateFiber`, `SwitchToFiber`, `IsThreadAFiber` | Portable context switch that also saves FP/SSE control state (RP-08) |
+| `cpu/guest_fiber.cpp` | 152 | None | Resolved by RP-08: `host/fiber.h` (Win32 fibers on Windows, `ucontext` on Linux, decision D1) |
 | `cpu/timebase.cpp` | 145 | One `_MSC_VER` branch, in the ARM64 path only | None: x86-64 already uses `__builtin_ia32_rdtsc` and ARM64 is out of scope |
 | `kernel/memory.cpp` | 154 | None | Resolved by RP-07: reservation moved to `host/guest_address_space_*.cpp` and covered by `GuestMemorySnapshot` |
 | `kernel/imports.cpp` | 4752 | None; compiles on Linux | Resolved by RP-05 and RP-06: host thread id, file helpers, and `host::RecursiveLock`; calendar conversion in `kernel/time_fields.h` |

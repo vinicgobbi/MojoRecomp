@@ -1,9 +1,7 @@
 #include "guest_fiber.h"
+#include "../host/fiber.h"
 #include "../kernel/memory.h"
 
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -27,13 +25,13 @@ struct ThreadFibers {
 thread_local ThreadFibers state;
 
 [[noreturn]] void Fail(const char* message) {
-    std::fprintf(stderr, "[cpu fiber] %s (host error %lu)\n", message, GetLastError());
+    std::fprintf(stderr, "[cpu fiber] %s\n", message);
     std::abort();
 }
 
-void WINAPI Enter(void*) {
+void Enter(void*) {
     auto& ctx = *state.context;
-    // SwitchToFiber restores host FP control too. The generated switch has
+    // The host fiber switch restores host FP control too. The generated switch has
     // already loaded the target FPSCR; synchronize it after the host switch.
     ctx.fpscr.setcsr(ctx.fpscr.csr);
     auto* entry = g_guestMemory.FindFunction(static_cast<uint32_t>(ctx.lr));
@@ -55,16 +53,14 @@ void Begin(PPCContext& ctx, uint32_t target, uint32_t pcr) {
     if (!state.root) {
         auto root = std::make_unique<Fiber>();
         root->guest = source;
-        state.convertedThread = !IsThreadAFiber();
-        root->host = state.convertedThread
-            ? ConvertThreadToFiberEx(nullptr, FIBER_FLAG_FLOAT_SWITCH) : GetCurrentFiber();
+        root->host = host::ConvertThreadToFiber(state.convertedThread);
         if (!root->host)
-            Fail("ConvertThreadToFiberEx failed");
+            Fail("converting the thread to a fiber failed");
         state.root = state.current = root.get();
         state.context = &ctx;
         state.fibers.emplace(source, std::move(root));
     }
-    if (state.context != &ctx || state.current->host != GetCurrentFiber())
+    if (state.context != &ctx || state.current->host != host::CurrentFiber())
         Fail("context or native thread ownership changed during a switch");
     if (state.current->guest != source) {
         // A guest may convert its original fiber back to a thread and later
@@ -97,7 +93,7 @@ void Commit(PPCContext& ctx, uint32_t sp, uint32_t thread,
     PPC_STORE_U32(thread + 0x60, stackLimit);
     ctx.r1.u64 = sp;
     if (source->guest == targetAddress)
-        return; // Windows must not SwitchToFiber(GetCurrentFiber()).
+        return; // A fiber must never switch to itself.
 
     auto found = state.fibers.find(targetAddress);
     if (found == state.fibers.end()) {
@@ -108,14 +104,13 @@ void Commit(PPCContext& ctx, uint32_t sp, uint32_t thread,
         target->stackLimit = stackLimit;
         // Host call frames are larger than PPC frames. Never size the native
         // stack from the guest's small stack allocation.
-        target->host = CreateFiberEx(0x40000, 0x400000, FIBER_FLAG_FLOAT_SWITCH,
-                                     Enter, nullptr);
+        target->host = host::CreateFiber(0x40000, 0x400000, Enter, nullptr);
         if (!target->host)
-            Fail("CreateFiberEx failed");
+            Fail("creating a host fiber failed");
         found = state.fibers.emplace(targetAddress, std::move(target)).first;
     }
     state.current = found->second.get();
-    SwitchToFiber(state.current->host);
+    host::SwitchToFiber(state.current->host);
     if (state.current != source)
         Fail("resumed the wrong native fiber");
     ctx.fpscr.setcsr(ctx.fpscr.csr);
@@ -128,7 +123,7 @@ void ReleaseStack(uint32_t stackLimit) {
             continue;
         if (fiber == state.current)
             Fail("attempt to delete the active fiber stack");
-        DeleteFiber(fiber->host);
+        host::DeleteFiber(fiber->host);
         state.fibers.erase(it);
         return;
     }
@@ -141,9 +136,9 @@ void Shutdown() {
         Fail("thread teardown must occur on its original native stack");
     for (const auto& [address, fiber] : state.fibers)
         if (fiber.get() != state.root)
-            DeleteFiber(fiber->host);
-    if (state.convertedThread && !ConvertFiberToThread())
-        Fail("ConvertFiberToThread failed");
+            host::DeleteFiber(fiber->host);
+    if (state.convertedThread && !host::ConvertFiberToThread())
+        Fail("converting the fiber back to a thread failed");
     state.fibers.clear();
     state.root = state.current = nullptr;
     state.context = nullptr;

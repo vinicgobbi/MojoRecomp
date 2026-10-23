@@ -18,9 +18,11 @@ option(MOJORECOMP_GUEST_IMAGE
 if(WIN32)
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_windows.cpp)
     set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_windows.cpp)
+    set(MOJORECOMP_HOST_FIBER_SOURCE host/fiber_windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(MOJORECOMP_HOST_PLATFORM_SOURCE host/platform_posix.cpp)
     set(MOJORECOMP_HOST_ADDRESS_SPACE_SOURCE host/guest_address_space_posix.cpp)
+    set(MOJORECOMP_HOST_FIBER_SOURCE host/fiber_posix.cpp)
 else()
     message(FATAL_ERROR "MojoRecomp runtime supports Windows and Linux hosts only")
 endif()
@@ -219,6 +221,12 @@ if(BUILD_TESTING)
     target_link_libraries(MojoRecompHostPlatformTest PRIVATE ${MOJORECOMP_HOST_PLATFORM_LIBS})
     add_test(NAME HostPlatform COMMAND MojoRecompHostPlatformTest)
     set_tests_properties(HostPlatform PROPERTIES TIMEOUT 10 LABELS "host")
+    add_executable(MojoRecompHostFiberTest
+        tests/host_fiber_test.cpp
+        ${MOJORECOMP_HOST_FIBER_SOURCE})
+    target_link_libraries(MojoRecompHostFiberTest PRIVATE Threads::Threads)
+    add_test(NAME HostFiber COMMAND MojoRecompHostFiberTest)
+    set_tests_properties(HostFiber PROPERTIES TIMEOUT 10 LABELS "host;cpu")
     add_executable(MojoRecompTimeFieldsTest tests/time_fields_test.cpp)
     add_test(NAME TimeFields COMMAND MojoRecompTimeFieldsTest)
     set_tests_properties(TimeFields PROPERTIES TIMEOUT 10 LABELS "kernel")
@@ -504,6 +512,7 @@ set(MOJORECOMP_KERNEL_SOURCES
     cpu/timebase.cpp
     cpu/guest_thread.cpp
     cpu/guest_fiber.cpp
+    ${MOJORECOMP_HOST_FIBER_SOURCE}
     runtime_state.cpp
     title_resources.cpp
     title_hooks.cpp)
